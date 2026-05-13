@@ -37,7 +37,7 @@ async def resume_ocr_api(text: str = Form(...)):
     """
     try:
         # 调用 AI 扫描仪进行拆解和找茬
-        sections = await llm_extract_sections(text)
+        sections = llm_extract_sections(text)
         return sections
     except Exception as e:
         # 如果医生晕倒了（报错），返回错误信息

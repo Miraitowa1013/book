@@ -163,8 +163,8 @@ onMounted(() => {});
     <div v-else class="flex h-full">
       
       <!-- 左侧：简历 X 光扫描仪 (诊断画布) -->
-      <section class="w-1/2 flex flex-col h-screen bg-white border-r border-slate-200 overflow-hidden">
-        <header class="p-6 border-b border-slate-100 flex items-center justify-between bg-white/80 backdrop-blur-md sticky top-0 z-20 flex-shrink-0">
+      <section class="w-1/2 flex flex-col bg-white border-r border-slate-200 overflow-hidden" style="height: calc(100vh - 0px);">
+        <header class="p-4 border-b border-slate-100 flex items-center justify-between bg-white/80 backdrop-blur-md sticky top-0 z-20 flex-shrink-0">
           <div class="flex items-center gap-3 cursor-pointer group" @click="view = 'landing'">
             <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform">
               <FileText class="w-5 h-5" />
@@ -177,9 +177,9 @@ onMounted(() => {});
           </div>
         </header>
 
-        <div class="flex-1 overflow-y-auto bg-slate-50/50 scrollbar-hide">
-          <div class="max-w-xl mx-auto p-8 space-y-6">
-            <div class="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-xl relative overflow-hidden">
+        <div class="flex-1 overflow-y-auto bg-slate-50/50" style="height: calc(100% - 80px);">
+          <div class="max-w-xl mx-auto p-6 space-y-6">
+            <div class="bg-white p-5 rounded-[2.5rem] border border-slate-100 shadow-xl relative overflow-hidden mt-4">
               <div class="scan-line" v-if="isAnalyzing"></div>
               <div class="absolute -top-2 left-8 bg-slate-900 text-white text-[10px] px-3 py-1 rounded-full font-bold uppercase tracking-[0.2em]">诊断画布 (CANVAS)</div>
               
@@ -189,38 +189,42 @@ onMounted(() => {});
                   :key="seg.id"
                   @click="startSqueeze(idx)"
                   :class="[
-                    'group p-4 rounded-[1.25rem] cursor-pointer transition-all border-2 relative',
+                    'group p-4 rounded-[1.25rem] cursor-pointer transition-all border-2 relative min-h-[80px]',
                     seg.status === 'danger' ? 'bg-red-50/40 border-red-100 hover:border-red-200' :
                     seg.status === 'success' ? 'bg-emerald-50/50 border-emerald-100 cursor-default suture-flash shadow-sm' : 'bg-orange-50/40 border-orange-100',
                     activeIndex === idx ? 'border-indigo-500 ring-4 ring-indigo-500/10' : 'border-transparent'
                   ]"
                 >
-                  <p :class="['text-[14px] leading-relaxed transition-colors', seg.status === 'success' ? 'text-emerald-800 font-bold italic' : 'text-slate-700']">
-                    {{ seg.text }}
-                  </p>
-                  <div class="mt-3 flex items-center gap-2">
-                    <CheckCircle2 v-if="seg.status === 'success'" class="w-4 h-4 text-emerald-500" />
-                    <AlertCircle v-else class="w-4 h-4 text-red-400" />
-                    <span :class="['text-[10px] font-black uppercase tracking-wider', seg.status === 'success' ? 'text-emerald-500' : 'text-slate-400']">
-                      {{ seg.diagnosis }}
-                    </span>
-                  </div>
-                  <div v-if="seg.status !== 'success'" class="absolute -right-2 top-1/2 -translate-y-1/2 translate-x-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all">
-                    <div class="bg-indigo-600 text-white p-2 rounded-full shadow-lg">
-                      <ArrowRight class="w-4 h-4" />
+                  <div class="flex items-start gap-3">
+                    <CheckCircle2 v-if="seg.status === 'success'" class="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    <AlertCircle v-else class="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                    <div class="flex-1 min-w-0">
+                      <p :class="['text-[14px] leading-relaxed transition-colors', seg.status === 'success' ? 'text-emerald-800 font-bold italic' : 'text-slate-700']">
+                        {{ seg.text }}
+                      </p>
+                      <div class="mt-2">
+                        <span :class="['text-[10px] font-black uppercase tracking-wider', seg.status === 'success' ? 'text-emerald-500' : 'text-slate-400']">
+                          {{ seg.diagnosis }}
+                        </span>
+                      </div>
+                    </div>
+                    <div v-if="seg.status !== 'success'" class="opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
+                      <div class="bg-indigo-600 text-white p-2 rounded-full shadow-lg">
+                        <ArrowRight class="w-4 h-4" />
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
-            <div class="flex justify-center opacity-30 text-[10px] font-bold uppercase tracking-[0.4em]">已扫描到文档底部</div>
+            <div class="flex justify-center opacity-30 text-[10px] font-bold uppercase tracking-[0.4em] py-4">已扫描到文档底部</div>
           </div>
         </div>
       </section>
 
       <!-- 右侧：AI 教练终端 (交互挤牙膏区) -->
-      <section class="flex-1 flex flex-col h-screen bg-[#0f172a] text-white relative overflow-hidden">
-        <header class="p-6 border-b border-white/5 flex items-center justify-between bg-black/20 backdrop-blur-md sticky top-0 z-20 flex-shrink-0">
+      <section class="flex-1 flex flex-col bg-[#0f172a] text-white relative overflow-hidden" style="height: calc(100vh - 0px);">
+        <header class="p-4 border-b border-white/5 flex items-center justify-between bg-black/20 backdrop-blur-md sticky top-0 z-20 flex-shrink-0">
           <div class="flex items-center gap-3">
             <Brain class="w-6 h-6 text-indigo-400" />
             <div>
@@ -235,7 +239,7 @@ onMounted(() => {});
           </div>
         </header>
 
-        <div class="flex-1 overflow-y-auto p-8 space-y-6 chat-container">
+        <div class="flex-1 overflow-y-auto p-6 space-y-4" style="height: calc(100% - 80px);">
           <!-- 引导状态 -->
           <div v-if="activeIndex === null" class="h-full flex flex-col items-center justify-center text-center opacity-20">
             <div class="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-6 border border-white/10 shadow-2xl">
