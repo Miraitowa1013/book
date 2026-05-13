@@ -1,11 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Form
 from pydantic import BaseModel
 from typing import List, Optional
 
-# 导入优化服务
-from app.services.suggestions import architect_service
-# 导入简历教练服务
-from app.services.suggestions import coach_service
+# 导入简历解析服务和教练服务
+from app.services.resume_ocr import llm_extract_sections
+from app.services.suggestions import architect_service, coach_service
 
 # 创建一个路由器，相当于诊所的“挂号窗口”
 router = APIRouter()
@@ -28,7 +27,24 @@ class CoachRequest(BaseModel):
     target_jd: Optional[str] = "" # 想要投递的岗位（选填）
 
 # ==========================================
-# 3. 核心改写接口
+# 3. 简历全盘体检接口（OCR）
+# ==========================================
+@router.post("/ocr")
+async def resume_ocr_api(text: str = Form(...)):
+    """
+    【简历全盘体检接口】
+    当前端把一大段简历文字传过来时，这个接口负责把它拆解成一段段“有病”或“健康”的卡片。
+    """
+    try:
+        # 调用 AI 扫描仪进行拆解和找茬
+        sections = await llm_extract_sections(text)
+        return sections
+    except Exception as e:
+        # 如果医生晕倒了（报错），返回错误信息
+        raise HTTPException(status_code=500, detail=f"体检系统异常: {str(e)}")
+
+# ==========================================
+# 4. 核心改写接口
 # ==========================================
 @router.post("/optimize")
 async def optimize_resume_segment(request: OptimizeRequest):
@@ -66,23 +82,21 @@ async def optimize_resume_segment(request: OptimizeRequest):
         )
 
 # ==========================================
-# 4. 简历教练对话接口
+# 5. 简历教练对话接口
 # ==========================================
 @router.post("/coach")
 async def resume_coach_api(request: CoachRequest):
     """
-    这是核心接口：
-    它负责把前端网页的“大白话”传给 AI，并把 AI 的“灵魂拷问”或“最终结果”传回给网页。
+    【AI 教练重构接口】
+    当用户点击某个红名段落，开始“挤牙膏”对话时，这个接口负责传话给 AI 教练。
     """
     try:
-        # 调用我们在第一步配置好的教练逻辑
+        # 调用 AI 教练进行灵魂拷问或重构
         result = await coach_service.coach_chat(
             current_text=request.current_text,
             chat_history=request.chat_history,
             target_jd=request.target_jd
         )
-        # 把 AI 算出来的结果原封不动发回给网页
         return result
     except Exception as e:
-        # 如果出错了，报一个错，防止程序直接崩溃
-        raise HTTPException(status_code=500, detail=f"医生大脑抽筋了: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"教练大脑断流: {str(e)}")
