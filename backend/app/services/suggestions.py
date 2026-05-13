@@ -1,12 +1,96 @@
+import os
 import json
 import logging
 import requests
 import asyncio
-from typing import Dict, Any, List
+import httpx
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 
 
 # 初始化日志记录器
 logger = logging.getLogger(__name__)
+
+# ==========================================
+# FastAPI 应用配置
+# ==========================================
+app = FastAPI()
+
+# 允许跨域（确保网页能访问到这个服务）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# [小白注意]：在这里填入你的硅基流动 API Key
+# 注册地址： https://cloud.siliconflow.cn/
+API_KEY = "sk-tnzuxxkuptjwcmeoeexkjdowbnbdqsnclxexsejagidgjfug"
+
+
+class CoachRequest(BaseModel):
+    current_text: str
+    chat_history: List[dict]
+    target_jd: Optional[str] = ""
+
+
+async def call_ai(system_prompt, user_prompt):
+    """通用 AI 调用函数"""
+    url = "https://api.siliconflow.cn/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "deepseek-ai/DeepSeek-V3",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "response_format": {"type": "json_object"}
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"AI 服务异常: {response.text}")
+        return json.loads(response.json()['choices'][0]['message']['content'])
+
+
+@app.post("/api/resume/ocr")
+async def ocr_diagnosis(text: str = Form(...)):
+    """全盘体检：拆分段落并找茬"""
+    system_prompt = """
+    你是一个资深HR。将用户简历拆解为段落，并对每一段进行诊断。
+    必须返回 JSON 数组格式：[{"text": "原文", "status": "danger|success|warning", "diagnosis": "诊断意见"}]
+    """
+    try:
+        return await call_ai(system_prompt, text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/resume/coach")
+async def coach_squeeze(request: CoachRequest):
+    """挤牙膏对话：根据对话决定是追问还是输出结果"""
+    system_prompt = f"""
+    你是一个简历架构师。当前重构段落：{request.current_text}。
+    如果数据不足，status="question"，继续追问细节。
+    如果数据充足，status="result"，输出 5D 重组资产（optimized_star, cover_letter, interview_questions）。
+    必须输出 JSON。
+    """
+    history_str = json.dumps(request.chat_history)
+    try:
+        return await call_ai(system_prompt, history_str)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 class ResumeArchitectService:
