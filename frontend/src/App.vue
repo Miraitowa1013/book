@@ -177,43 +177,62 @@ onMounted(() => {});
           </div>
         </header>
 
-        <div class="flex-1 overflow-y-auto bg-slate-50/50" style="height: calc(100% - 80px);">
-          <div class="max-w-xl mx-auto p-6 space-y-6">
-            <div class="bg-white p-5 rounded-[2.5rem] border border-slate-100 shadow-xl relative overflow-hidden mt-4">
-              <div class="scan-line" v-if="isAnalyzing"></div>
-              <div class="absolute -top-2 left-8 bg-slate-900 text-white text-[10px] px-3 py-1 rounded-full font-bold uppercase tracking-[0.2em]">诊断画布 (CANVAS)</div>
+        <div class="flex-1 overflow-y-auto bg-slate-100 p-4" style="height: calc(100% - 80px);">
+          <div class="max-w-lg mx-auto">
+            <!-- 诊断画布容器 -->
+            <div class="bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden">
+              <!-- 画布标题栏 -->
+              <div class="bg-gradient-to-r from-indigo-900 to-indigo-700 px-6 py-4">
+                <div class="flex items-center gap-3">
+                  <div class="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
+                    <FileText class="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 class="text-white font-black text-sm uppercase tracking-widest">诊断画布</h3>
+                    <p class="text-indigo-200 text-xs">Diagnosis Canvas</p>
+                  </div>
+                </div>
+              </div>
               
-              <div class="space-y-4 mt-6">
+              <!-- 画布内容区 -->
+              <div class="p-6 space-y-4">
                 <div
                   v-for="(seg, idx) in segments"
                   :key="seg.id"
                   @click="startSqueeze(idx)"
                   :class="[
-                    'group p-5 rounded-[1.5rem] cursor-pointer transition-all border-2 relative min-h-[100px]',
+                    'group p-5 rounded-2xl cursor-pointer transition-all border-2',
                     seg.status === 'danger' ? 'bg-red-50 border-red-200 hover:border-red-300 hover:bg-red-100' :
-                    seg.status === 'success' ? 'bg-emerald-50 border-emerald-200 cursor-default shadow-sm' : 'bg-orange-50 border-orange-200 hover:border-orange-300 hover:bg-orange-100',
-                    activeIndex === idx ? 'border-indigo-500 ring-4 ring-indigo-500/10 scale-[1.02]' : ''
+                    seg.status === 'success' ? 'bg-emerald-50 border-emerald-200 cursor-default' : 'bg-orange-50 border-orange-200 hover:border-orange-300 hover:bg-orange-100',
+                    activeIndex === idx ? 'border-indigo-500 ring-4 ring-indigo-500/20 shadow-lg' : ''
                   ]"
                 >
                   <div class="flex items-start gap-4">
-                    <div :class="['w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5',
-                      seg.status === 'success' ? 'bg-emerald-100' : 'bg-red-100']">
-                      <CheckCircle2 v-if="seg.status === 'success'" class="w-6 h-6 text-emerald-600" />
-                      <AlertCircle v-else class="w-6 h-6 text-red-500" />
+                    <!-- 状态图标 -->
+                    <div :class="['w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0',
+                      seg.status === 'success' ? 'bg-emerald-100' : seg.status === 'danger' ? 'bg-red-100' : 'bg-orange-100']">
+                      <CheckCircle2 v-if="seg.status === 'success'" class="w-7 h-7 text-emerald-600" />
+                      <AlertCircle v-else-if="seg.status === 'danger'" class="w-7 h-7 text-red-500" />
+                      <AlertCircle v-else class="w-7 h-7 text-orange-500" />
                     </div>
-                    <div class="flex-1 min-w-0">
-                      <p :class="['text-base leading-relaxed transition-colors font-medium', 
+                    
+                    <!-- 内容区域 -->
+                    <div class="flex-1">
+                      <p :class="['text-lg leading-relaxed font-semibold', 
                         seg.status === 'success' ? 'text-emerald-800' : seg.status === 'danger' ? 'text-red-800' : 'text-orange-800']">
                         {{ seg.text }}
                       </p>
-                      <div class="mt-3 p-3 rounded-lg bg-white/60 border">
+                      <div :class="['mt-3 p-3 rounded-xl',
+                        seg.status === 'success' ? 'bg-emerald-100/50' : 'bg-slate-100']">
                         <span :class="['text-sm font-medium', 
-                          seg.status === 'success' ? 'text-emerald-600' : 'text-slate-600']">
+                          seg.status === 'success' ? 'text-emerald-700' : 'text-slate-700']">
                           {{ seg.diagnosis }}
                         </span>
                       </div>
                     </div>
-                    <div v-if="seg.status !== 'success'" class="opacity-0 group-hover:opacity-100 transition-all flex-shrink-0 mt-1">
+                    
+                    <!-- 箭头按钮 -->
+                    <div v-if="seg.status !== 'success'" class="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-all">
                       <div class="bg-indigo-600 text-white p-3 rounded-full shadow-lg hover:bg-indigo-500">
                         <ArrowRight class="w-5 h-5" />
                       </div>
@@ -221,8 +240,15 @@ onMounted(() => {});
                   </div>
                 </div>
               </div>
+              
+              <!-- 底部提示 -->
+              <div class="px-6 py-4 bg-slate-50 border-t border-slate-100">
+                <div class="flex items-center justify-center gap-2 text-slate-400">
+                  <div class="w-2 h-2 bg-indigo-400 rounded-full"></div>
+                  <span class="text-xs font-medium uppercase tracking-wider">已扫描到文档底部</span>
+                </div>
+              </div>
             </div>
-            <div class="flex justify-center opacity-30 text-[10px] font-bold uppercase tracking-[0.4em] py-4">已扫描到文档底部</div>
           </div>
         </div>
       </section>
