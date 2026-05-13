@@ -3,8 +3,12 @@ import { ref, computed, nextTick, onMounted } from 'vue';
 import { Brain, Activity, ShieldCheck, Loader2, FileText, AlertCircle, CheckCircle2, ArrowRight, Target, Trash2, Send, Mic, Sparkles } from 'lucide-vue-next';
 import axios from 'axios';
 
+// 这里的地址要指向你后端 8000 端口的总机
+const API_BASE = "http://localhost:8000/api/resume";
+
 const view = ref<'landing' | 'workspace'>('landing');
 const rawInput = ref('');
+const targetJD = ref(""); // 用来存你想投递的岗位要求
 const isAnalyzing = ref(false);
 const isProcessing = ref(false);
 const activeIndex = ref<number | null>(null);
@@ -34,12 +38,26 @@ const segments = ref<Segment[]>([
 
 const dangerCount = computed(() => segments.value.filter(s => s.status !== 'success').length);
 
-const handleStartAnalysis = () => {
+const handleStartAnalysis = async () => {
+  if (rawInput.value.trim().length < 10) return;
+  
   isAnalyzing.value = true;
-  setTimeout(() => {
+  try {
+    // 1. 把文字打包
+    const formData = new FormData();
+    formData.append('text', rawInput.value);
+    
+    // 2. 真正喊后端干活
+    const res = await axios.post(`${API_BASE}/ocr`, formData);
+    
+    // 3. 把 AI 诊断好的结果拿回来
+    segments.value = res.data;
     view.value = 'workspace';
+  } catch (error) {
+    alert("联网失败！请检查后端 python main.py 是否启动了");
+  } finally {
     isAnalyzing.value = false;
-  }, 1800);
+  }
 };
 
 const startSqueeze = (index: number) => {
@@ -56,48 +74,35 @@ const startSqueeze = (index: number) => {
 };
 
 const handleSendMessage = async () => {
-  if (!userInput.value.trim() || isProcessing.value || activeIndex.value === null) return;
+  if (!userInput.value.trim() || isProcessing.value) return;
 
-  const msg = userInput.value;
-  chatHistory.value.push({ role: 'user', content: msg });
-  userInput.value = '';
+  const currentMsg = userInput.value;
+  chatHistory.value.push({ role: "user", content: currentMsg });
+  userInput.value = "";
   isProcessing.value = true;
 
   try {
-    const response = await axios.post<CoachResponse>('/api/resume/coach', {
+    // 呼叫后端：把对话发给 AI 教练
+    const res = await axios.post(`${API_BASE}/coach`, {
       current_text: segments.value[activeIndex.value].text,
       chat_history: chatHistory.value,
-      target_jd: ''
+      target_jd: targetJD.value // 带上目标岗位，AI 更有针对性
     });
 
-    const result = response.data;
-    
-    chatHistory.value.push({
-      role: 'assistant',
-      content: result.message
-    });
+    const data = res.data;
+    chatHistory.value.push({ role: "assistant", content: data.message });
 
-    if (result.status === 'result' && result.optimized_star) {
-      // 重构成功
-      segments.value[activeIndex.value].text = result.optimized_star;
-      segments.value[activeIndex.value].status = 'success';
-      segments.value[activeIndex.value].diagnosis = result.diagnosis || '重构成功！该段落已具备大厂投递竞争力。';
+    // 如果 AI 觉得数据挤够了，就执行"原地进化"
+    if (data.status === 'result') {
+      segments.value[activeIndex.value].text = data.optimized_star;
+      segments.value[activeIndex.value].status = "success";
+      segments.value[activeIndex.value].diagnosis = "重构成功！文案已进化。";
     }
   } catch (error) {
-    console.error('API调用失败:', error);
-    chatHistory.value.push({
-      role: 'assistant',
-      content: '哎呀，AI服务暂时有点忙。请你再补充一些细节，比如具体的数字或数据？'
-    });
+    chatHistory.value.push({ role: "assistant", content: "教练大脑断线了，请重试。" });
+  } finally {
+    isProcessing.value = false;
   }
-
-  isProcessing.value = false;
-  nextTick(() => {
-    const chatContainer = document.querySelector('.chat-container') as HTMLElement;
-    if (chatContainer) {
-      chatContainer.scrollTop = chatContainer.scrollHeight;
-    }
-  });
 };
 
 onMounted(() => {});
@@ -120,6 +125,16 @@ onMounted(() => {});
         <p class="text-slate-500 font-medium text-lg">"不要做机械的翻译，要做挖掘职业高光的基因重塑。"</p>
         
         <div class="bg-white rounded-[3rem] shadow-2xl border-2 border-slate-100 overflow-hidden flex flex-col transition-all hover:border-indigo-100">
+          <div class="text-left bg-indigo-50/50 p-6 rounded-3xl border border-indigo-100 m-4">
+            <label class="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2 block">
+              目标岗位 (JD) - 让诊断更精准
+            </label>
+            <input 
+              v-model="targetJD"
+              placeholder="输入你想投递的职位描述..."
+              class="w-full bg-white border border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-400"
+            />
+          </div>
           <textarea 
             v-model="rawInput"
             class="w-full h-80 p-10 text-lg outline-none resize-none placeholder:text-slate-200 leading-relaxed"
