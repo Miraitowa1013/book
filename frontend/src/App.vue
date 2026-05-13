@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from 'vue';
-import { Brain, Activity, ShieldCheck, Loader2, FileText, AlertCircle, CheckCircle2, ArrowRight, Target, Trash2, Send, Mic, Sparkles } from 'lucide-vue-next';
+import { ref, computed, nextTick, onMounted, watch } from 'vue';
+import { Brain, Activity, ShieldCheck, Loader2, FileText, AlertCircle, CheckCircle2, ArrowRight, Target, Trash2, Send, Mic, Sparkles, Mail, MessageCircleQuestion, Briefcase, Map } from 'lucide-vue-next';
 import axios from 'axios';
 
 // 这里的地址要指向你后端 8000 端口的总机
@@ -14,6 +14,17 @@ const isProcessing = ref(false);
 const activeIndex = ref<number | null>(null);
 const userInput = ref('');
 const chatHistory = ref<{ role: string; content: string }[]>([]);
+const chatContainer = ref<HTMLElement | null>(null);
+
+const activeTab = ref('star');
+
+const refactoredAssets = ref({
+  star: "",
+  letter: "",
+  interview: [] as string[],
+  jobs: [] as string[],
+  career: ""
+});
 
 interface Segment {
   id: number;
@@ -28,6 +39,10 @@ interface CoachResponse {
   optimized_star: string;
   diagnosis: string;
   missing_metrics?: string[];
+  cover_letter?: string;
+  interview_questions?: string[];
+  job_recommendations?: string[];
+  career_advice?: string;
 }
 
 const segments = ref<Segment[]>([
@@ -38,8 +53,33 @@ const segments = ref<Segment[]>([
 
 const dangerCount = computed(() => segments.value.filter(s => s.status !== 'success').length);
 
+const tabs = [
+  { id: 'star', iconName: 'sparkles', label: '黄金STAR' },
+  { id: 'letter', iconName: 'mail', label: '求职信' },
+  { id: 'interview', iconName: 'message-circle-question', label: '面试预测' },
+  { id: 'jobs', iconName: 'briefcase', label: '职位推荐' },
+  { id: 'career', iconName: 'map', label: '职业规划' }
+];
+
+// --- 图标渲染辅助 ---
+const refreshIcons = () => {
+  nextTick(() => {
+    if (window.lucide) {
+      window.lucide.createIcons();
+    }
+  });
+};
+
+watch(view, refreshIcons);
+watch(segments, refreshIcons, { deep: true });
+watch(chatHistory, refreshIcons, { deep: true });
+watch(activeTab, refreshIcons);
+
 const handleStartAnalysis = async () => {
-  if (rawInput.value.trim().length < 10) return;
+  if (rawInput.value.trim().length < 10) {
+    alert("请多提供一些简历内容，方便 AI 诊断");
+    return;
+  }
   
   isAnalyzing.value = true;
   try {
@@ -65,16 +105,19 @@ const startSqueeze = (index: number) => {
   activeIndex.value = index;
   const segment = segments.value[index];
   
+  refactoredAssets.value = { star: "", letter: "", interview: [], jobs: [], career: "" };
+  activeTab.value = 'star';
+
   chatHistory.value = [
     {
       role: 'assistant',
-      content: `你好！针对你说的这段话："${segment.text}"，HR 的毒舌诊断是：${segment.diagnosis}。咱们挤挤牙膏：这个功能当时有多少人访问？或者你写了多少个接口？请直接用大白话告诉我，不用管格式。`
+      content: `诊断报告：${segment.diagnosis}。这段经历写得太单薄了。请用大白话告诉我：你当时到底解决了什么痛点？有什么具体的数字指标能证明你的成绩？`
     }
   ];
 };
 
 const handleSendMessage = async () => {
-  if (!userInput.value.trim() || isProcessing.value) return;
+  if (!userInput.value.trim() || isProcessing.value || activeIndex.value === null) return;
 
   const currentMsg = userInput.value;
   chatHistory.value.push({ role: "user", content: currentMsg });
@@ -89,7 +132,7 @@ const handleSendMessage = async () => {
       target_jd: targetJD.value // 带上目标岗位，AI 更有针对性
     });
 
-    const data = res.data;
+    const data = res.data as CoachResponse;
     chatHistory.value.push({ role: "assistant", content: data.message });
 
     // 如果 AI 觉得数据挤够了，就执行"原地进化"
@@ -97,6 +140,21 @@ const handleSendMessage = async () => {
       segments.value[activeIndex.value].text = data.optimized_star;
       segments.value[activeIndex.value].status = "success";
       segments.value[activeIndex.value].diagnosis = "重构成功！文案已进化。";
+
+      refactoredAssets.value = {
+        star: data.optimized_star || "",
+        letter: data.cover_letter || "未生成求职信",
+        interview: data.interview_questions || [],
+        jobs: data.job_recommendations || [],
+        career: data.career_advice || "未生成建议"
+      };
+
+      chatHistory.value.push({ role: "assistant", content: "✨ 完美！核心数据已捕捉，左侧简历已原地进化，右下方已为您解锁 5 维求职资产包。" });
+    }
+
+    await nextTick();
+    if (chatContainer.value) {
+      chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
     }
   } catch (error) {
     chatHistory.value.push({ role: "assistant", content: "教练大脑断线了，请重试。" });
@@ -105,11 +163,28 @@ const handleSendMessage = async () => {
   }
 };
 
-onMounted(() => {});
+const copyAsset = (text: string) => {
+  if (!text) return;
+  try {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+    alert("已成功复制到剪贴板！");
+  } catch (err) {
+    console.error("复制失败", err);
+  }
+};
+
+onMounted(() => {
+  refreshIcons();
+});
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-slate-50">
+  <div class="h-screen flex flex-col bg-slate-50 overflow-hidden">
     
     <!-- [第一阶段：全局导入与体检] -->
     <main v-if="view === 'landing'" class="flex-1 flex flex-col items-center justify-center p-6 bg-white relative">
@@ -253,87 +328,136 @@ onMounted(() => {});
         </div>
       </section>
 
-      <!-- 右侧：AI 教练终端 (交互挤牙膏区) -->
+      <!-- 右侧：AI 教练终端 (交互挤牙膏区 + 5D 资产) -->
       <section class="flex-1 flex flex-col bg-[#0f172a] text-white relative overflow-hidden" style="height: calc(100vh - 0px);">
-        <header class="p-4 border-b border-white/5 flex items-center justify-between bg-black/20 backdrop-blur-md sticky top-0 z-20 flex-shrink-0">
-          <div class="flex items-center gap-3">
-            <Brain class="w-6 h-6 text-indigo-400" />
-            <div>
-              <h2 class="text-sm font-black uppercase tracking-widest">Architect_Coach</h2>
-              <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest">模式: 互动挤牙膏</p>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <button v-if="activeIndex !== null" @click="activeIndex = null" class="p-2.5 hover:bg-white/10 rounded-xl transition-all active:scale-90">
-              <Trash2 class="w-4 h-4 text-slate-500" />
-            </button>
-          </div>
-        </header>
-
-        <div class="flex-1 overflow-y-auto p-6 space-y-4" style="height: calc(100% - 80px);">
-          <!-- 引导状态 -->
-          <div v-if="activeIndex === null" class="h-full flex flex-col items-center justify-center text-center opacity-20">
-            <div class="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-6 border border-white/10 shadow-2xl">
-              <Target class="w-10 h-10" />
-            </div>
-            <p class="text-xs font-black uppercase tracking-[0.4em] leading-loose">
-              请在左侧点击<br/>标红的"病灶"进行重构手术
-            </p>
-          </div>
-          
-          <!-- 聊天流 -->
-          <div v-else v-for="(msg, i) in chatHistory" :key="i" :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
-            <div :class="['max-w-[85%] p-6 rounded-[2rem] text-[14px] leading-relaxed shadow-xl',
-              msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white/5 border border-white/10 text-slate-200 rounded-bl-none']">
-              {{ msg.content }}
-            </div>
-          </div>
-
-          <!-- 教练思考中 -->
-          <div v-if="isProcessing" class="flex justify-start">
-            <div class="bg-white/5 p-5 rounded-[2.5rem] flex items-center gap-4 border border-white/10 shadow-xl">
-              <div class="flex gap-1.5">
-                <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce"></div>
-                <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
-                <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div>
-              </div>
-              <span class="text-[10px] font-black text-slate-500 uppercase tracking-widest">教练正在深度解析大白话...</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 交互输入区 (大白话通道) -->
-        <div class="p-8 border-t border-white/5 bg-black/40 backdrop-blur-xl">
-          <div :class="['relative transition-all duration-500', activeIndex === null ? 'opacity-10 pointer-events-none grayscale blur-sm' : 'opacity-100']">
-            <textarea
-                v-model="userInput"
-                @keydown.enter.prevent="handleSendMessage"
-                placeholder="在此输入大白话补充细节：其实那个项目我还带了3个人，提升了20%的效率..."
-                class="w-full h-32 bg-white/5 border border-white/10 rounded-[2rem] p-6 pr-20 outline-none focus:ring-4 focus:ring-indigo-500/20 resize-none text-[15px] transition-all placeholder:text-slate-600 leading-relaxed"
-            ></textarea>
-            <button
-                @click="handleSendMessage"
-                :disabled="isProcessing || !userInput.trim()"
-                class="absolute right-4 bottom-4 p-4 bg-indigo-600 rounded-2xl hover:bg-indigo-500 active:scale-95 disabled:opacity-20 transition-all shadow-xl shadow-indigo-600/30"
-            >
-              <Send class="w-5 h-5 text-white" />
-            </button>
-          </div>
-          <div class="mt-6 flex items-center justify-between text-[10px] font-black text-slate-600 uppercase tracking-[0.2em] px-2">
-            <div class="flex items-center gap-4">
-              <div class="flex items-center gap-1.5 text-indigo-400">
-                <div class="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-pulse"></div>
-                Session: Active
-              </div>
-              <div class="flex items-center gap-1.5 cursor-pointer hover:text-slate-400 transition-colors">
-                <Mic class="w-3 h-3" /> 开启语音录入
+        
+        <!-- 对话舱 -->
+        <div class="h-[55%] flex flex-col border-b border-white/5">
+          <header class="p-4 border-b border-white/5 flex items-center justify-between bg-black/20 backdrop-blur-md sticky top-0 z-20 flex-shrink-0">
+            <div class="flex items-center gap-3">
+              <Brain class="w-6 h-6 text-indigo-400" />
+              <div>
+                <h2 class="text-sm font-black uppercase tracking-widest">Architect_Coach</h2>
+                <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest">模式: 互动挤牙膏</p>
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <Sparkles class="w-3 h-3 text-indigo-400" /> Powered by DeepSeek-V3
+              <button v-if="activeIndex !== null" @click="activeIndex = null" class="p-2.5 hover:bg-white/10 rounded-xl transition-all active:scale-90">
+                <Trash2 class="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+          </header>
+
+          <div ref="chatContainer" class="flex-1 overflow-y-auto p-6 space-y-4 scrollbar-hide">
+            <!-- 引导状态 -->
+            <div v-if="activeIndex === null" class="h-full flex flex-col items-center justify-center text-center opacity-20">
+              <div class="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-6 border border-white/10 shadow-2xl">
+                <Target class="w-10 h-10" />
+              </div>
+              <p class="text-xs font-black uppercase tracking-[0.4em] leading-loose">
+                请在左侧点击<br/>标红的"病灶"进行重构手术
+              </p>
+            </div>
+            
+            <!-- 聊天流 -->
+            <div v-else v-for="(msg, i) in chatHistory" :key="i" :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
+              <div :class="['max-w-[85%] p-6 rounded-[2rem] text-[14px] leading-relaxed shadow-xl',
+                msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white/5 border border-white/10 text-slate-200 rounded-bl-none']">
+                {{ msg.content }}
+              </div>
+            </div>
+
+            <!-- 教练思考中 -->
+            <div v-if="isProcessing" class="flex justify-start">
+              <div class="bg-white/5 p-5 rounded-[2.5rem] flex items-center gap-4 border border-white/10 shadow-xl">
+                <div class="flex gap-1.5">
+                  <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce"></div>
+                  <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
+                  <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div>
+                </div>
+                <span class="text-[10px] font-black text-slate-500 uppercase tracking-widest">教练正在深度解析大白话...</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 交互输入区 (大白话通道) -->
+          <div class="p-8 border-t border-white/5 bg-black/40 backdrop-blur-xl">
+            <div :class="['relative transition-all duration-500', activeIndex === null ? 'opacity-10 pointer-events-none grayscale blur-sm' : 'opacity-100']">
+              <textarea
+                  v-model="userInput"
+                  @keydown.enter.prevent="handleSendMessage"
+                  placeholder="在此输入大白话补充细节：其实那个项目我还带了3个人，提升了20%的效率..."
+                  class="w-full h-32 bg-white/5 border border-white/10 rounded-[2rem] p-6 pr-20 outline-none focus:ring-4 focus:ring-indigo-500/20 resize-none text-[15px] transition-all placeholder:text-slate-600 leading-relaxed"
+              ></textarea>
+              <button
+                  @click="handleSendMessage"
+                  :disabled="isProcessing || !userInput.trim()"
+                  class="absolute right-4 bottom-4 p-4 bg-indigo-600 rounded-2xl hover:bg-indigo-500 active:scale-95 disabled:opacity-20 transition-all shadow-xl shadow-indigo-600/30"
+              >
+                <Send class="w-5 h-5 text-white" />
+              </button>
+            </div>
+            <div class="mt-6 flex items-center justify-between text-[10px] font-black text-slate-600 uppercase tracking-[0.2em] px-2">
+              <div class="flex items-center gap-4">
+                <div class="flex items-center gap-1.5 text-indigo-400">
+                  <div class="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-pulse"></div>
+                  Session: Active
+                </div>
+                <div class="flex items-center gap-1.5 cursor-pointer hover:text-slate-400 transition-colors">
+                  <Mic class="w-3 h-3" /> 开启语音录入
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <Sparkles class="w-3 h-3 text-indigo-400" /> Powered by DeepSeek-V3
+              </div>
             </div>
           </div>
         </div>
+
+        <!-- 5D 资产展示区 -->
+        <div class="flex-1 flex flex-col bg-slate-900/50">
+          <nav class="flex border-b border-white/5">
+            <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
+                :class="['flex-1 py-4 flex flex-col items-center gap-1 transition-all border-b-2', 
+                activeTab === tab.id ? 'border-indigo-500 text-white bg-indigo-500/10' : 'border-transparent text-slate-500 hover:text-slate-300']">
+              <component :is="tab.id === 'star' ? Sparkles : tab.id === 'letter' ? Mail : tab.id === 'interview' ? MessageCircleQuestion : tab.id === 'jobs' ? Briefcase : Map" class="w-4 h-4" />
+              <span class="text-[9px] font-black uppercase tracking-widest">{{tab.label}}</span>
+            </button>
+          </nav>
+
+          <div class="flex-1 overflow-y-auto p-8 scrollbar-hide">
+            <div v-if="!refactoredAssets.star" class="h-full flex items-center justify-center opacity-10 italic text-slate-400">完成重构后，在此处解锁您的 5 维求职资产包</div>
+            <div v-else class="animate-in fade-in slide-in-from-right-4 duration-500">
+              
+              <div v-if="activeTab === 'star'" class="space-y-4">
+                <div class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 leading-relaxed italic">"{{ refactoredAssets.star }}"</div>
+                <button @click="copyAsset(refactoredAssets.star)" class="text-[10px] font-black text-indigo-400 hover:text-indigo-300 transition-colors uppercase tracking-widest flex items-center gap-1">一键复制 STAR 经历</button>
+              </div>
+              
+              <div v-if="activeTab === 'letter'" class="space-y-4">
+                <div class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 whitespace-pre-wrap leading-relaxed">{{ refactoredAssets.letter }}</div>
+                <button @click="copyAsset(refactoredAssets.letter)" class="text-[10px] font-black text-indigo-400 hover:text-indigo-300 uppercase tracking-widest flex items-center gap-1">复制求职信</button>
+              </div>
+              
+              <div v-if="activeTab === 'interview'" class="space-y-3">
+                <div v-for="(q, i) in refactoredAssets.interview" :key="i" class="p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex gap-3 items-start">
+                  <span class="text-red-400 font-black mt-0.5">Q{{ i + 1 }}</span>
+                  <span class="text-slate-300 leading-relaxed">{{q}}</span>
+                </div>
+              </div>
+              
+              <div v-if="activeTab === 'jobs'" class="grid grid-cols-2 gap-4">
+                <div v-for="job in refactoredAssets.jobs" :key="job" class="p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-center font-bold text-indigo-200">{{job}}</div>
+              </div>
+              
+              <div v-if="activeTab === 'career'" class="bg-blue-900/20 p-6 rounded-2xl border border-blue-500/30 border-dashed text-slate-300 leading-relaxed">
+                {{ refactoredAssets.career }}
+              </div>
+
+            </div>
+          </div>
+        </div>
+
       </section>
     </div>
   </div>
@@ -373,5 +497,12 @@ onMounted(() => {});
 @keyframes float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-10px); }
+}
+.evolution-flash {
+  animation: evolution-flash 1s ease-out;
+}
+@keyframes evolution-flash {
+  0% { background-color: #ecfdf5; transform: scale(1.02); }
+  100% { background-color: transparent; transform: scale(1); }
 }
 </style>
