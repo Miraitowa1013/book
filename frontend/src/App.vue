@@ -183,34 +183,39 @@ onMounted(() => {});
               <div class="scan-line" v-if="isAnalyzing"></div>
               <div class="absolute -top-2 left-8 bg-slate-900 text-white text-[10px] px-3 py-1 rounded-full font-bold uppercase tracking-[0.2em]">诊断画布 (CANVAS)</div>
               
-              <div class="space-y-4 mt-4">
+              <div class="space-y-4 mt-6">
                 <div
                   v-for="(seg, idx) in segments"
                   :key="seg.id"
                   @click="startSqueeze(idx)"
                   :class="[
-                    'group p-4 rounded-[1.25rem] cursor-pointer transition-all border-2 relative min-h-[80px]',
-                    seg.status === 'danger' ? 'bg-red-50/40 border-red-100 hover:border-red-200' :
-                    seg.status === 'success' ? 'bg-emerald-50/50 border-emerald-100 cursor-default suture-flash shadow-sm' : 'bg-orange-50/40 border-orange-100',
-                    activeIndex === idx ? 'border-indigo-500 ring-4 ring-indigo-500/10' : 'border-transparent'
+                    'group p-5 rounded-[1.5rem] cursor-pointer transition-all border-2 relative min-h-[100px]',
+                    seg.status === 'danger' ? 'bg-red-50 border-red-200 hover:border-red-300 hover:bg-red-100' :
+                    seg.status === 'success' ? 'bg-emerald-50 border-emerald-200 cursor-default shadow-sm' : 'bg-orange-50 border-orange-200 hover:border-orange-300 hover:bg-orange-100',
+                    activeIndex === idx ? 'border-indigo-500 ring-4 ring-indigo-500/10 scale-[1.02]' : ''
                   ]"
                 >
-                  <div class="flex items-start gap-3">
-                    <CheckCircle2 v-if="seg.status === 'success'" class="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" />
-                    <AlertCircle v-else class="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                  <div class="flex items-start gap-4">
+                    <div :class="['w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5',
+                      seg.status === 'success' ? 'bg-emerald-100' : 'bg-red-100']">
+                      <CheckCircle2 v-if="seg.status === 'success'" class="w-6 h-6 text-emerald-600" />
+                      <AlertCircle v-else class="w-6 h-6 text-red-500" />
+                    </div>
                     <div class="flex-1 min-w-0">
-                      <p :class="['text-[14px] leading-relaxed transition-colors', seg.status === 'success' ? 'text-emerald-800 font-bold italic' : 'text-slate-700']">
+                      <p :class="['text-base leading-relaxed transition-colors font-medium', 
+                        seg.status === 'success' ? 'text-emerald-800' : seg.status === 'danger' ? 'text-red-800' : 'text-orange-800']">
                         {{ seg.text }}
                       </p>
-                      <div class="mt-2">
-                        <span :class="['text-[10px] font-black uppercase tracking-wider', seg.status === 'success' ? 'text-emerald-500' : 'text-slate-400']">
+                      <div class="mt-3 p-3 rounded-lg bg-white/60 border">
+                        <span :class="['text-sm font-medium', 
+                          seg.status === 'success' ? 'text-emerald-600' : 'text-slate-600']">
                           {{ seg.diagnosis }}
                         </span>
                       </div>
                     </div>
-                    <div v-if="seg.status !== 'success'" class="opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
-                      <div class="bg-indigo-600 text-white p-2 rounded-full shadow-lg">
-                        <ArrowRight class="w-4 h-4" />
+                    <div v-if="seg.status !== 'success'" class="opacity-0 group-hover:opacity-100 transition-all flex-shrink-0 mt-1">
+                      <div class="bg-indigo-600 text-white p-3 rounded-full shadow-lg hover:bg-indigo-500">
+                        <ArrowRight class="w-5 h-5" />
                       </div>
                     </div>
                   </div>
