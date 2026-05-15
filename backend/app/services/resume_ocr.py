@@ -176,46 +176,35 @@ def truncate_for_llm(text: str, max_chars: int = 8000) -> str:
 def llm_extract_sections(resume_text: str, target_jd: str = "") -> Any:
     """
     【ARK_XRAY 核心大脑】：
-    一次调用完成诊断和5D资产生成，速度更快，输出更稳定
+    简历体检诊断 - 仅负责将简历拆分为逻辑段落并进行诊断
+    5D资产由后续的AI教练服务生成
     """
     client = SiliconFlowClient()
     truncated = truncate_for_llm(resume_text)
 
     jd_info = f"\n【目标岗位】：{target_jd}" if target_jd else ""
 
-    system_prompt = """你是一个世界顶尖的技术猎头和简历架构师。
+    system_prompt = """你是一个严苛的大厂HR。
 
-你的任务：
-1. 将简历文本拆分为逻辑段落并诊断
-2. 生成5D求职资产包
+任务：将简历拆分为逻辑段落，对比目标JD进行诊断。
 
 【诊断规则】：
 1. 姓名/电话/邮箱等个人信息：status=success, diagnosis="个人联系方式，无需优化"
 2. 个人概况：分析是否清晰有力、突出核心竞争力
 3. 教育背景：分析专业对标度、GPA竞争力、荣誉含金量
-4. 工作/项目经历：分析技术栈深度、业务复杂度、量化成果
+4. 工作/项目经历：分析技术栈深度、业务复杂度、量化成果，结合JD指出缺乏哪些具体数据或能力
 5. status: danger/warning/success
-
-【5D资产】：
-- optimized_star: STAR法则重写（中文）
-- cover_letter: 求职信100字内（中文）
-- interview_questions: 3个面试问题+破局思路（中文）
-- job_recommendations: 3个岗位推荐（中文）
-- career_advice: 1-3年职业规划（中文）
 
 【目标岗位】：""" + (target_jd if target_jd else "未指定") + """
 
 【输出格式】（严格JSON，无markdown）：
-{
-  "sections": [{"text": "原文", "status": "success/warning/danger", "diagnosis": "诊断", "star": "情境(Situation):内容\n任务(Task):内容\n行动(Action):内容\n结果(Result):内容", "cover_letter": "该段经历相关的求职信片段", "interview_questions": ["问题1", "问题2", "问题3"], "job_recommendations": ["推荐1", "推荐2", "推荐3"], "career_advice": "职业规划建议"}],
-  "assets": {
-    "optimized_star": "情境(Situation):内容\n任务(Task):内容\n行动(Action):内容\n结果(Result):内容",
-    "cover_letter": "求职信",
-    "interview_questions": ["问题1", "问题2", "问题3"],
-    "job_recommendations": ["推荐1", "推荐2", "推荐3"],
-    "career_advice": "职业规划"
+[
+  {
+    "text": "原文",
+    "status": "danger/warning/success",
+    "diagnosis": "毒舌诊断（结合JD指出缺乏哪些具体数据或能力）"
   }
-}"""
+]"""
 
     user_prompt = f"简历分析：{jd_info}\n\n{truncated}"
 
@@ -232,43 +221,39 @@ def llm_extract_sections(resume_text: str, target_jd: str = "") -> Any:
         parsed_result = extract_json_object(response_content)
 
         sections = []
-        sections_data = parsed_result.get("sections", [])
-        if isinstance(sections_data, list):
-            for idx, item in enumerate(sections_data):
+        # 现在返回的是一个列表
+        if isinstance(parsed_result, list):
+            for idx, item in enumerate(parsed_result):
                 if isinstance(item, dict):
-                    # 获取面试问题和岗位推荐，确保是列表
-                    interview_qs = item.get("interview_questions", [])
-                    job_recs = item.get("job_recommendations", [])
-                    if not isinstance(interview_qs, list):
-                        interview_qs = []
-                    if not isinstance(job_recs, list):
-                        job_recs = []
-                    
                     sections.append({
                         "id": idx + 1,
                         "text": str(item.get("text", "")),
                         "status": str(item.get("status", "warning")),
-                        "diagnosis": str(item.get("diagnosis", "")),
-                        "star": str(item.get("star", "")),
-                        "cover_letter": str(item.get("cover_letter", "")),
-                        "interview_questions": interview_qs,
-                        "job_recommendations": job_recs,
-                        "career_advice": str(item.get("career_advice", ""))
+                        "diagnosis": str(item.get("diagnosis", ""))
                     })
+        else:
+            # 兼容旧格式（如果返回的是字典）
+            sections_data = parsed_result.get("sections", []) if isinstance(parsed_result, dict) else []
+            if isinstance(sections_data, list):
+                for idx, item in enumerate(sections_data):
+                    if isinstance(item, dict):
+                        sections.append({
+                            "id": idx + 1,
+                            "text": str(item.get("text", "")),
+                            "status": str(item.get("status", "warning")),
+                            "diagnosis": str(item.get("diagnosis", ""))
+                        })
 
         if not sections:
             sections = [{"id": 1, "text": truncated[:200], "status": "warning", "diagnosis": "未能识别简历段落，请重试"}]
 
-        assets_data = parsed_result.get("assets", {})
-        if not isinstance(assets_data, dict):
-            assets_data = {}
-
+        # 5D资产为空，由后续AI教练服务生成
         assets = {
-            "optimized_star": str(assets_data.get("optimized_star", "")),
-            "cover_letter": str(assets_data.get("cover_letter", "")),
-            "interview_questions": assets_data.get("interview_questions", []) if isinstance(assets_data.get("interview_questions"), list) else [],
-            "job_recommendations": assets_data.get("job_recommendations", []) if isinstance(assets_data.get("job_recommendations"), list) else [],
-            "career_advice": str(assets_data.get("career_advice", ""))
+            "optimized_star": "",
+            "cover_letter": "",
+            "interview_questions": [],
+            "job_recommendations": [],
+            "career_advice": ""
         }
 
         return {
