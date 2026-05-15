@@ -217,6 +217,7 @@ const handleSendMessage = async () => {
     // 呼叫后端：把对话发给 AI 教练
     const res = await axios.post(`${API_BASE}/coach`, {
       current_text: segments.value[activeIndex.value].text,
+      full_resume: rawInput.value, // 带上全局简历，让AI有全局视野
       chat_history: chatHistory.value,
       target_jd: targetJD.value // 带上目标岗位，AI 更有针对性
     });

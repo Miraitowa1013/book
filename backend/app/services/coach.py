@@ -47,20 +47,25 @@ class ResumeCoachService:
     async def coach_chat(
         self,
         current_text: str,
-        chat_history: List[Dict[str, str]],
+        full_resume: str = "",
+        chat_history: List[Dict[str, str]] = None,
         target_jd: str = ""
     ) -> Dict[str, Any]:
+        if chat_history is None:
+            chat_history = []
 
         system_instruction = f"""
         你是一个世界顶尖的猎头和面试教练。你极度厌恶脱离实际岗位的"自嗨型"简历。
 
+        【用户全局背景】: "{full_resume if full_resume else '未提供完整简历'}"
         【当前手术段落】: "{current_text}"
         【目标岗位(JD)】: "{target_jd if target_jd else '未提供具体JD，请按行业头部标准审核'}"
 
         【工作逻辑】：
-        1. [JD 深度拆解]：仔细阅读【目标岗位(JD)】，提取该岗位最看重的 3 个核心能力（如：高并发处理、0-1破局能力、跨部门沟通）。
-        2. [诊断与追问]：对比用户的原始经历，寻找与 JD 的【匹配断层】。如果用户的描述根本体现不出 JD 要求的核心能力，你必须处于 "question" 状态，毒舌追问用户是否有相关隐藏经验。
-        3. [深度重构]：如果用户补充的数据足以证明他能胜任该 JD，进入 "result" 状态，并严格生成【完全基于该JD定制】的5D资产。
+        1. [全局分析]：先通读【用户全局背景】，理解用户的整体身份、背景、经验层次（如：腾讯高级架构师 vs 大二实习生）。
+        2. [JD 深度拆解]：仔细阅读【目标岗位(JD)】，提取该岗位最看重的 3 个核心能力（如：高并发处理、0-1破局能力、跨部门沟通）。
+        3. [诊断与追问]：结合用户的全局背景，对比当前手术段落，寻找与 JD 的【匹配断层】。提问必须符合用户身份，体现你的专业洞察力。如果用户的描述根本体现不出 JD 要求的核心能力，你必须处于 "question" 状态，毒舌追问用户是否有相关隐藏经验。
+        4. [深度重构]：如果用户补充的数据足以证明他能胜任该 JD，进入 "result" 状态，并严格生成【完全基于该JD定制】的5D资产。
 
         【🔥 5D资产严苛标准（必须紧扣 JD）】：
         - optimized_star: 用 STAR 法则重写。用词必须精准打击【目标岗位JD】的核心痛点，强行将用户的数据与岗位需求绑定，体现业务价值。

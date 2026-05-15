@@ -72,6 +72,7 @@ class OptimizeRequest(BaseModel):
 
 class CoachRequest(BaseModel):
     current_text: str
+    full_resume: Optional[str] = ""
     chat_history: List[dict]
     target_jd: Optional[str] = ""
 
@@ -139,6 +140,7 @@ async def resume_coach_api(request: CoachRequest):
         from app.services.coach import coach_service
         return await coach_service.coach_chat(
             current_text=request.current_text,
+            full_resume=request.full_resume,
             chat_history=request.chat_history,
             target_jd=request.target_jd
         )
