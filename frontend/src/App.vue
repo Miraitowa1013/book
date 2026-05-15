@@ -31,6 +31,12 @@ interface Segment {
   text: string;
   status: 'danger' | 'warning' | 'success';
   diagnosis: string;
+  star: string;
+  cover_letter: string;
+  interview_questions: string[];
+  job_recommendations: string[];
+  career_advice: string;
+  assets?: RefactoredAssets;
 }
 
 interface CoachResponse {
@@ -166,6 +172,21 @@ const startSqueeze = (index: number) => {
   activeIndex.value = index;
   const segment = segments.value[index];
   
+  // 每次切换病灶都重新加载数据（不再依赖isNewSegment判断）
+  if (segment.assets) {
+    // 如果该病灶已有资产（通过AI教练生成的），加载其资产数据（优先显示完善后的版本）
+    refactoredAssets.value = segment.assets;
+  } else {
+    // 加载分析阶段生成的初始5D资产
+    refactoredAssets.value = {
+      star: segment.star || (segment.status === 'success' ? "这段经历非常优秀！无需额外优化。" : ""),
+      letter: segment.cover_letter || "点击下方输入框，描述你的经历以生成个性化求职信",
+      interview: segment.interview_questions && segment.interview_questions.length > 0 ? segment.interview_questions : ["请描述你的经历，我将为你生成面试问题"],
+      jobs: segment.job_recommendations && segment.job_recommendations.length > 0 ? segment.job_recommendations : ["请描述你的经历，我将为你推荐匹配岗位"],
+      career: segment.career_advice || "请描述你的经历，我将为你制定职业规划"
+    };
+  }
+  
   // 只有首次打开或切换到不同的病灶时，才重置对话历史
   // 但保留已生成的5D资产，除非用户主动退出或重新分析
   if (isNewSegment || chatHistory.value.length === 0) {
@@ -211,20 +232,24 @@ const handleSendMessage = async () => {
 
     // 如果 AI 觉得数据挤够了，就执行"原地进化"
     if (data.status === 'result') {
-      segments.value[activeIndex.value].text = data.optimized_star;
-      segments.value[activeIndex.value].status = "success";
-      segments.value[activeIndex.value].diagnosis = "重构成功！基因已优化。";
+        const assets = {
+          star: data.optimized_star || "",
+          letter: data.cover_letter || "未生成求职信",
+          interview: data.interview_questions || [],
+          jobs: data.job_recommendations || [],
+          career: data.career_advice || "未生成建议"
+        };
 
-      refactoredAssets.value = {
-        star: data.optimized_star || "",
-        letter: data.cover_letter || "未生成求职信",
-        interview: data.interview_questions || [],
-        jobs: data.job_recommendations || [],
-        career: data.career_advice || "未生成建议"
-      };
+        segments.value[activeIndex.value].text = data.optimized_star;
+        segments.value[activeIndex.value].status = "success";
+        segments.value[activeIndex.value].diagnosis = "重构成功！基因已优化。";
+        // 保存资产到当前病灶
+        segments.value[activeIndex.value].assets = assets;
 
-      chatHistory.value.push({ role: "assistant", content: "✨ 完美！核心数据已捕捉，左侧简历已原地进化，右下方已为您解锁 5 维求职资产包。" });
-    }
+        refactoredAssets.value = assets;
+
+        chatHistory.value.push({ role: "assistant", content: "✨ 完美！核心数据已捕捉，左侧简历已原地进化，右下方已为您解锁 5 维求职资产包。" });
+      }
 
     await nextTick();
     if (chatContainer.value) {
@@ -239,27 +264,107 @@ const handleSendMessage = async () => {
 
 const formatStarContent = (content: string): string => {
   // 匹配 STAR 各部分并添加换行和样式
-  // 支持 Situation、Task、Action、Result 关键词
+  // 支持多种格式：英文关键词（Situation:）、中文格式（具体情境（S））、中文带英文（情境 (Situation)）
   let result = content;
   
-  // 在每个关键词前添加换行和样式（除了开头）
-  const keywords = ['Situation:', 'Task:', 'Action:', 'Result:'];
+  // 定义关键词映射 - 按优先级排列
+  const keywordPairs = [
+    // 格式1: 情境 (Situation): 内容
+    { pattern: /情境\s*\(\s*Situation\s*\)\s*：?\s*/g, label: '【情境】' },
+    { pattern: /任务\s*\(\s*Task\s*\)\s*：?\s*/g, label: '【任务】' },
+    { pattern: /行动\s*\(\s*Action\s*\)\s*：?\s*/g, label: '【行动】' },
+    { pattern: /结果\s*\(\s*Result\s*\)\s*：?\s*/g, label: '【结果】' },
+    // 格式2: Situation: 内容
+    { pattern: /Situation:\s*/g, label: '【Situation】' },
+    { pattern: /Task:\s*/g, label: '【Task】' },
+    { pattern: /Action:\s*/g, label: '【Action】' },
+    { pattern: /Result:\s*/g, label: '【Result】' },
+    // 格式3: 具体情境（S）内容
+    { pattern: /具体情境\s*\（?S\）?\s*/g, label: '【Situation】' },
+    { pattern: /我的任务\s*\（?T\）?\s*/g, label: '【Task】' },
+    { pattern: /采取的行动\s*\（?A\）?\s*/g, label: '【Action】' },
+    { pattern: /最终成果\s*\（?R\）?\s*/g, label: '【Result】' },
+  ];
   
-  keywords.forEach((keyword, index) => {
-    const regex = new RegExp(keyword, 'g');
-    if (index === 0) {
-      // 第一个关键词，保持在行首，加粗显示
-      result = result.replace(regex, `<br><span class="font-bold text-indigo-400">${keyword}</span>`);
-    } else {
-      // 其他关键词，添加换行和加粗
-      result = result.replace(regex, `<br><br><span class="font-bold text-indigo-400">${keyword}</span>`);
+  // 标记所有匹配位置
+  const matches: { index: number; length: number; label: string }[] = [];
+  keywordPairs.forEach(({ pattern, label }) => {
+    let match;
+    const regex = new RegExp(pattern.source, 'g');
+    while ((match = regex.exec(content)) !== null) {
+      matches.push({ index: match.index, length: match[0].length, label });
     }
   });
   
-  // 移除开头多余的换行
-  result = result.replace(/^<br>/, '');
+  // 按位置排序
+  matches.sort((a, b) => a.index - b.index);
+  
+  // 构建结果
+  if (matches.length > 0) {
+    result = '';
+    let lastIndex = 0;
+    
+    matches.forEach((match, idx) => {
+      // 添加关键词前的内容
+      if (match.index > lastIndex) {
+        result += content.substring(lastIndex, match.index);
+      }
+      
+      // 添加换行（第一个关键词前不加换行）
+      if (idx > 0) {
+        result += '<br><br>';
+      }
+      
+      // 添加关键词和样式
+      result += `<span class="font-bold text-indigo-400">${match.label}</span>`;
+      
+      lastIndex = match.index + match.length;
+    });
+    
+    // 添加最后一个关键词后的内容
+    if (lastIndex < content.length) {
+      result += content.substring(lastIndex);
+    }
+  }
   
   return result;
+};
+
+const formatCareerContent = (content: string): string => {
+  try {
+    const data = JSON.parse(content);
+    let result = '';
+    
+    const keys = Object.keys(data);
+    keys.forEach((key, idx) => {
+      const value = data[key];
+      
+      if (idx > 0) {
+        result += '<br><br>';
+      }
+      
+      if (typeof value === 'object') {
+        result += `<span class="font-bold text-blue-400">【${key}】</span>`;
+        
+        const subKeys = Object.keys(value);
+        subKeys.forEach((subKey) => {
+          result += `<br><span class="text-blue-300">${subKey}：</span>`;
+          if (Array.isArray(value[subKey])) {
+            result += value[subKey].map((item: string, i: number) => `<br>${i + 1}. ${item}`).join('');
+          } else {
+            result += value[subKey];
+          }
+        });
+      } else {
+        result += `<span class="font-bold text-blue-400">【${key}】</span>`;
+        result += `<br>${value}`;
+      }
+    });
+    
+    return result;
+  } catch {
+    return content;
+  }
 };
 
 const copyAsset = async (text: string) => {
@@ -463,7 +568,7 @@ onMounted(() => {
             <div v-if="refactoredAssets.star || refactoredAssets.letter || refactoredAssets.interview.length || refactoredAssets.jobs.length || refactoredAssets.career" class="animate-in fade-in slide-in-from-right-4 duration-500">
               
               <div v-if="activeTab === 'star'" class="space-y-4">
-                <div v-if="refactoredAssets.star" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 leading-relaxed">
+                <div v-if="refactoredAssets.star" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 leading-relaxed whitespace-pre-wrap">
                   <div v-html="formatStarContent(refactoredAssets.star)"></div>
                 </div>
                 <div v-else class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-500 text-center">当前模块暂无 STAR 改写</div>
@@ -489,8 +594,8 @@ onMounted(() => {
                 <div v-if="!refactoredAssets.jobs.length" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-500 text-center">未生成职位推荐</div>
               </div>
               
-              <div v-if="activeTab === 'career'" class="bg-blue-900/20 p-6 rounded-2xl border border-blue-500/30 border-dashed text-slate-300 leading-relaxed">
-                {{ refactoredAssets.career || "未生成职业规划建议" }}
+              <div v-if="activeTab === 'career'" class="bg-blue-900/20 p-6 rounded-2xl border border-blue-500/30 border-dashed text-slate-300 leading-relaxed whitespace-pre-wrap">
+                <div v-html="refactoredAssets.career ? formatCareerContent(refactoredAssets.career) : '未生成职业规划建议'"></div>
               </div>
 
             </div>

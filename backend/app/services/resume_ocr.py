@@ -76,11 +76,26 @@ class SiliconFlowClient:
         if extra:
             payload.update(extra)
 
-        try:
-            with httpx.Client(timeout=httpx.Timeout(90.0, connect=10.0), trust_env=False) as client:
-                resp = client.post(url, headers=headers, json=payload)
-        except httpx.RequestError as e:
-            raise RuntimeError(f"硅基流动请求异常: {e}") from e
+        # 重试机制和更长的超时时间
+        delays = [1, 2, 4, 8]  # 重试间隔
+        last_exception = None
+        
+        for attempt in range(4):  # 最多重试4次
+            try:
+                # 增加超时时间：读取超时180秒，连接超时30秒
+                with httpx.Client(
+                    timeout=httpx.Timeout(180.0, connect=30.0), 
+                    trust_env=False
+                ) as client:
+                    resp = client.post(url, headers=headers, json=payload)
+                    break
+            except httpx.RequestError as e:
+                last_exception = e
+                if attempt < 3:  # 不是最后一次尝试
+                    import time
+                    time.sleep(delays[attempt])
+                    continue
+                raise RuntimeError(f"硅基流动请求异常: {e}") from e
 
         if not resp.is_success:
             resp_text = ""
@@ -192,9 +207,9 @@ def llm_extract_sections(resume_text: str, target_jd: str = "") -> Any:
 
 【输出格式】（严格JSON，无markdown）：
 {
-  "sections": [{"text": "原文", "status": "success/warning/danger", "diagnosis": "诊断"}],
+  "sections": [{"text": "原文", "status": "success/warning/danger", "diagnosis": "诊断", "star": "情境(Situation):内容\n任务(Task):内容\n行动(Action):内容\n结果(Result):内容", "cover_letter": "该段经历相关的求职信片段", "interview_questions": ["问题1", "问题2", "问题3"], "job_recommendations": ["推荐1", "推荐2", "推荐3"], "career_advice": "职业规划建议"}],
   "assets": {
-    "optimized_star": "STAR内容",
+    "optimized_star": "情境(Situation):内容\n任务(Task):内容\n行动(Action):内容\n结果(Result):内容",
     "cover_letter": "求职信",
     "interview_questions": ["问题1", "问题2", "问题3"],
     "job_recommendations": ["推荐1", "推荐2", "推荐3"],
@@ -221,11 +236,24 @@ def llm_extract_sections(resume_text: str, target_jd: str = "") -> Any:
         if isinstance(sections_data, list):
             for idx, item in enumerate(sections_data):
                 if isinstance(item, dict):
+                    # 获取面试问题和岗位推荐，确保是列表
+                    interview_qs = item.get("interview_questions", [])
+                    job_recs = item.get("job_recommendations", [])
+                    if not isinstance(interview_qs, list):
+                        interview_qs = []
+                    if not isinstance(job_recs, list):
+                        job_recs = []
+                    
                     sections.append({
                         "id": idx + 1,
                         "text": str(item.get("text", "")),
                         "status": str(item.get("status", "warning")),
-                        "diagnosis": str(item.get("diagnosis", ""))
+                        "diagnosis": str(item.get("diagnosis", "")),
+                        "star": str(item.get("star", "")),
+                        "cover_letter": str(item.get("cover_letter", "")),
+                        "interview_questions": interview_qs,
+                        "job_recommendations": job_recs,
+                        "career_advice": str(item.get("career_advice", ""))
                     })
 
         if not sections:
