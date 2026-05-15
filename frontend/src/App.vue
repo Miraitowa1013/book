@@ -386,6 +386,41 @@ const copyAsset = async (text: string) => {
   }
 };
 
+const copyFinalResume = async () => {
+  if (segments.value.length === 0) {
+    alert("没有可导出的简历内容！");
+    return;
+  }
+
+  const resumeText = segments.value.map((seg, index) => {
+    if (seg.status === 'success') {
+      return `✨ [优化版]: ${seg.text}`;
+    } else {
+      return seg.text;
+    }
+  }).join('\n\n');
+
+  try {
+    await navigator.clipboard.writeText(resumeText);
+    alert("✅ 已成功导出重构后的全量简历到剪贴板！\n\n优化过的段落已用 ✨ 标记，可直接粘贴到 Word 中使用。");
+  } catch (err) {
+    const textArea = document.createElement("textarea");
+    textArea.value = resumeText;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      alert("✅ 已成功导出重构后的全量简历到剪贴板！\n\n优化过的段落已用 ✨ 标记，可直接粘贴到 Word 中使用。");
+    } catch (e) {
+      console.error("复制失败", e);
+      alert("复制失败，请手动复制");
+    }
+    document.body.removeChild(textArea);
+  }
+};
+
 onMounted(() => {
   refreshIcons();
 });
