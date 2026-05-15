@@ -23,8 +23,11 @@ const refactoredAssets = ref({
   letter: "",
   interview: [] as string[],
   jobs: [] as string[],
-  career: ""
+  career: "",
+  match: ""
 });
+
+const showExportPreview = ref(false);
 
 interface Segment {
   id: number;
@@ -61,9 +64,9 @@ const dangerCount = computed(() => segments.value.filter(s => s.status !== 'succ
 
 const tabs = [
   { id: 'star', iconName: 'sparkles', label: '黄金STAR' },
-  { id: 'letter', iconName: 'mail', label: '求职信' },
+  { id: 'match', iconName: 'target', label: '匹配度' },
   { id: 'interview', iconName: 'message-circle-question', label: '面试预测' },
-  { id: 'jobs', iconName: 'briefcase', label: '职位推荐' },
+  { id: 'letter', iconName: 'mail', label: '求职信' },
   { id: 'career', iconName: 'map', label: '职业规划' }
 ];
 
@@ -421,6 +424,14 @@ const copyFinalResume = async () => {
   }
 };
 
+const openExportPreview = () => {
+  showExportPreview.value = true;
+};
+
+const printPDF = () => {
+  window.print();
+};
+
 onMounted(() => {
   refreshIcons();
 });
@@ -540,8 +551,8 @@ onMounted(() => {
         
         <!-- 导出按钮 -->
         <footer class="p-6 border-t border-slate-100 bg-white sticky bottom-0 z-10">
-          <button @click="copyFinalResume" class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 active:scale-95 transition-all">
-            <CheckCircle2 class="w-5 h-5" /> 导出重构后的全量简历
+          <button @click="openExportPreview" class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 active:scale-95 transition-all">
+            <CheckCircle2 class="w-5 h-5" /> 预览并导出大厂简历 PDF
           </button>
         </footer>
       </section>
@@ -592,9 +603,9 @@ onMounted(() => {
                 :class="['flex-1 py-4 flex flex-col items-center gap-1 transition-all border-b-2', 
                 activeTab === tab.id ? 'border-indigo-500 text-white bg-indigo-500/10' : 'border-transparent text-slate-500 hover:text-slate-300']">
               <Sparkles v-if="tab.id === 'star'" class="w-4 h-4" />
-              <Mail v-else-if="tab.id === 'letter'" class="w-4 h-4" />
+              <Target v-else-if="tab.id === 'match'" class="w-4 h-4" />
               <MessageCircleQuestion v-else-if="tab.id === 'interview'" class="w-4 h-4" />
-              <Briefcase v-else-if="tab.id === 'jobs'" class="w-4 h-4" />
+              <Mail v-else-if="tab.id === 'letter'" class="w-4 h-4" />
               <Map v-else class="w-4 h-4" />
               <span class="text-[9px] font-black uppercase tracking-widest">{{tab.label}}</span>
             </button>
@@ -604,12 +615,22 @@ onMounted(() => {
             <!-- 只要有任何资产已生成，就显示资产卡片 -->
             <div v-if="refactoredAssets.star || refactoredAssets.letter || refactoredAssets.interview.length || refactoredAssets.jobs.length || refactoredAssets.career" class="animate-in fade-in slide-in-from-right-4 duration-500">
               
+              <!-- 黄金 STAR -->
               <div v-if="activeTab === 'star'" class="space-y-4">
-                <div v-if="refactoredAssets.star" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 leading-relaxed whitespace-pre-wrap">
-                  <div v-html="formatStarContent(refactoredAssets.star)"></div>
+                <div v-if="refactoredAssets.star" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-emerald-300 font-bold leading-relaxed italic">
+                  "{{ refactoredAssets.star }}"
                 </div>
-                <div v-else class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-500 text-center">当前模块暂无 STAR 改写</div>
+                <div v-else class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-500 text-center">完成重构后，在此处解锁标准化资产包</div>
                 <button v-if="refactoredAssets.star" @click="copyAsset(refactoredAssets.star)" class="text-[10px] font-black text-indigo-400 hover:text-indigo-300 transition-colors uppercase tracking-widest flex items-center gap-1">一键复制 STAR 经历</button>
+              </div>
+
+              <!-- JD 匹配度分析 -->
+              <div v-if="activeTab === 'match'" class="bg-indigo-900/20 p-6 rounded-2xl border border-indigo-500/30 text-indigo-100 whitespace-pre-wrap leading-relaxed shadow-inner">
+                <div class="flex items-center gap-2 mb-4 text-indigo-400">
+                  <Target class="w-4 h-4" />
+                  <span class="font-black text-sm tracking-wider uppercase">JD Gap Analysis</span>
+                </div>
+                {{ refactoredAssets.match || '完成重构后，在此处显示 JD 匹配度分析报告' }}
               </div>
               
               <div v-if="activeTab === 'letter'" class="space-y-4">
@@ -642,6 +663,47 @@ onMounted(() => {
         </div>
 
       </section>
+    </div>
+
+    <!-- 导出预览模态框 -->
+    <div v-if="showExportPreview" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-8 print:hidden">
+      <div class="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-300">
+        <!-- 预览操作栏 -->
+        <div class="flex justify-between items-center mb-10 pb-6 border-b border-slate-100 px-8 pt-8 sticky top-0 bg-white/90 backdrop-blur z-10">
+          <button @click="showExportPreview = false" class="px-6 py-2.5 text-slate-500 hover:text-slate-800 font-bold rounded-xl hover:bg-slate-50 transition-colors">
+            ← 返回继续优化
+          </button>
+          <button @click="printPDF" class="px-8 py-3 bg-slate-900 text-white font-black rounded-xl hover:bg-black active:scale-95 shadow-lg shadow-black/20 flex items-center gap-2 transition-all">
+            <FileText class="w-4 h-4" /> 另存为 PDF
+          </button>
+        </div>
+
+        <!-- 极简大厂简历模板 -->
+        <div class="px-8 pb-8 overflow-y-auto max-h-[calc(90vh-120px)] print:overflow-visible">
+          <div class="prose max-w-none text-slate-900 print:prose-lg">
+            <h1 class="text-3xl font-black mb-8 tracking-tight border-b-2 border-slate-900 pb-4 uppercase">Profile</h1>
+
+            <!-- 如果用户输入了目标JD，在顶部显示目标岗位 -->
+            <div v-if="targetJD" class="mb-10 p-5 bg-slate-50 rounded-xl text-sm text-slate-600 border border-slate-100">
+              <span class="font-bold text-slate-800">🎯 目标投递岗位：</span> {{ targetJD }}
+            </div>
+
+            <h2 class="text-lg font-black mt-8 mb-6 uppercase tracking-widest text-slate-400">Experience / 项目重构清单</h2>
+            <div class="space-y-6">
+              <div v-for="(seg, idx) in segments" :key="idx" class="text-[15px] leading-relaxed">
+                <!-- 已经成功被 AI 重构的段落（黄金字体） -->
+                <p v-if="seg.status === 'success'" class="font-bold relative pl-5 before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:bg-indigo-600 before:rounded-full text-slate-800">
+                  {{ seg.text }}
+                </p>
+                <!-- 尚未重构的原段落（灰色弱化） -->
+                <p v-else class="text-slate-500 relative pl-5 before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:bg-slate-300 before:rounded-full">
+                  {{ seg.text }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
