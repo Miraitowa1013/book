@@ -434,6 +434,27 @@ const printPDF = () => {
   window.print();
 };
 
+const resetWorkspace = () => {
+  view.value = 'landing';
+  activeIndex.value = null;
+  chatHistory.value = [];
+  refactoredAssets.value = {
+    star: "",
+    letter: "",
+    interview: [],
+    jobs: [],
+    career: "",
+    match: ""
+  };
+};
+
+const formatText = (text: string): string => {
+  let result = text;
+  result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  result = result.replace(/\n/g, '<br>');
+  return result;
+};
+
 onMounted(() => {
   refreshIcons();
 });
@@ -511,11 +532,11 @@ onMounted(() => {
     <div v-else class="flex h-full">
       <section class="w-[42%] flex flex-col border-r border-slate-200 bg-white shadow-inner">
         <header class="p-6 border-b border-slate-100 flex items-center justify-between bg-white/80 backdrop-blur-md">
-          <div class="flex items-center gap-3 cursor-pointer" @click="view = 'landing'">
-            <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white">
+          <div class="flex items-center gap-3 cursor-pointer" @click="resetWorkspace" title="返回首页">
+            <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white hover:bg-indigo-700 transition-colors">
               <FileText :size="20"/>
             </div>
-            <h1 class="font-black text-xl italic tracking-tighter uppercase leading-none">ARK_XRAY</h1>
+            <h1 class="font-black text-xl italic tracking-tighter uppercase leading-none hover:text-indigo-600 transition-colors">ARK_XRAY</h1>
           </div>
           <div class="flex bg-red-100 px-4 py-1.5 rounded-full items-center gap-2 shadow-sm">
             <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
@@ -573,8 +594,8 @@ onMounted(() => {
             </div>
             <div v-else v-for="(msg, i) in chatHistory" :key="i" :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
               <div :class="['max-w-[85%] p-5 rounded-[1.5rem] text-[14px] leading-relaxed shadow-xl animate-in slide-in-from-bottom-2', 
-                msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white/5 border border-white/10 text-slate-200 rounded-bl-none']">
-                {{ msg.content }}
+                msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white/5 border border-white/10 text-slate-200 rounded-bl-none']"
+                v-html="formatText(msg.content)">
               </div>
             </div>
             <div v-if="isProcessing" class="text-[10px] font-black text-slate-500 uppercase px-4 animate-pulse">AI 正在深度剖析 JD...</div>
@@ -612,15 +633,10 @@ onMounted(() => {
               </div>
 
               <!-- JD 契合度剖析 -->
-              <div v-if="activeTab === 'match'" class="bg-indigo-900/20 p-6 rounded-2xl border border-indigo-500/30 text-indigo-100 whitespace-pre-wrap leading-relaxed shadow-inner">
-                <div class="flex items-center gap-2 mb-4 text-indigo-400">
-                  <TargetIcon :size="18" />
-                  <span class="font-black text-sm tracking-wider uppercase">JD Gap Analysis</span>
-                </div>
-                {{ refactoredAssets.match }}
+              <div v-if="activeTab === 'match'" class="bg-indigo-900/20 p-6 rounded-2xl border border-indigo-500/30 text-indigo-100 whitespace-pre-wrap leading-relaxed shadow-inner" v-html="formatText(refactoredAssets.match)">
               </div>
 
-              <!-- 面试预测防崩溃保护 -->
+              <!-- 面试预测 -->
               <div v-if="activeTab === 'interview'" class="space-y-3">
                 <div v-for="(q, i) in refactoredAssets.interview" :key="i" class="p-5 bg-red-500/10 border border-red-500/20 rounded-xl flex flex-col gap-2">
                   <div class="flex items-start gap-3">
@@ -631,20 +647,19 @@ onMounted(() => {
                   </div>
                   <div v-if="q.includes('【破局思路】')" class="ml-8 mt-2 p-3 bg-black/40 rounded-lg border border-red-500/10 text-slate-400 text-xs leading-relaxed">
                      <span class="text-red-300/80 font-bold mr-1">破局思路:</span>
-                     {{ q.split('【破局思路】')[1] }}
+                     <span v-html="formatText(q.split('【破局思路】')[1])"></span>
                   </div>
                 </div>
               </div>
 
               <!-- 求职信 -->
               <div v-if="activeTab === 'letter'" class="space-y-4">
-                <div class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 whitespace-pre-wrap leading-relaxed">{{ refactoredAssets.letter }}</div>
+                <div class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 whitespace-pre-wrap leading-relaxed" v-html="formatText(refactoredAssets.letter)"></div>
                 <button @click="copyAsset(refactoredAssets.letter)" class="text-[10px] font-black text-indigo-400 hover:text-indigo-300 uppercase tracking-widest flex items-center gap-1">复制专属求职信</button>
               </div>
 
               <!-- 职业规划 -->
-              <div v-if="activeTab === 'career'" class="bg-slate-800/40 p-6 rounded-2xl border border-slate-700 text-slate-300 leading-relaxed">
-                {{ refactoredAssets.career }}
+              <div v-if="activeTab === 'career'" class="bg-slate-800/40 p-6 rounded-2xl border border-slate-700 text-slate-300 leading-relaxed" v-html="formatText(refactoredAssets.career)">
               </div>
 
             </div>
@@ -671,7 +686,8 @@ onMounted(() => {
             <div class="h-1 w-full bg-slate-900 mb-8"></div>
 
             <div class="space-y-4">
-              <div v-for="(seg, idx) in segments" :key="idx" class="text-[14px] leading-relaxed text-justify">
+              <!-- 增加 print-break-inside-avoid 类，防止跨页截断 -->
+              <div v-for="(seg, idx) in segments" :key="idx" class="text-[14px] leading-relaxed text-justify print-break-inside-avoid">
                 <p class="text-slate-800 whitespace-pre-wrap font-medium">
                   {{ seg.text }}
                 </p>
@@ -725,5 +741,9 @@ onMounted(() => {
 @keyframes evolution-flash {
   0% { background-color: #ecfdf5; transform: scale(1.02); }
   100% { background-color: transparent; transform: scale(1); }
+}
+.print-break-inside-avoid {
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 </style>
