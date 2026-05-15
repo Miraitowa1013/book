@@ -3,8 +3,8 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue';
 import { Brain, Activity, ShieldCheck, Loader2, FileText, AlertCircle, CheckCircle2, ArrowRight, Target, Trash2, Send, Mic, Sparkles, Mail, MessageCircleQuestion, Briefcase, Map } from 'lucide-vue-next';
 import axios from 'axios';
 
-// 这里的地址要指向你后端 8000 端口的总机
-const API_BASE = "http://localhost:8000/api/resume";
+// 这里的地址要指向你后端 8080 端口的总机
+const API_BASE = "/api/resume";
 
 const view = ref<'landing' | 'workspace'>('landing');
 const rawInput = ref('');
@@ -74,6 +74,46 @@ watch(view, refreshIcons);
 watch(segments, refreshIcons, { deep: true });
 watch(chatHistory, refreshIcons, { deep: true });
 watch(activeTab, refreshIcons);
+watch(isAnalyzing, refreshIcons);
+watch(isProcessing, refreshIcons);
+
+const handlePdfUpload = async (event: Event) => {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  if (!file) return;
+  
+  if (!file.name.toLowerCase().endsWith('.pdf')) {
+    alert("请上传PDF格式的文件");
+    return;
+  }
+  
+  isAnalyzing.value = true;
+  
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const res = await axios.post(`${API_BASE}/upload_pdf`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    });
+    
+    if (res.data.success) {
+      rawInput.value = res.data.text;
+      alert("PDF解析成功！内容已导入，请点击'执行全盘分诊'开始分析。");
+    } else {
+      alert(res.data.message || "未能从PDF中提取到文本内容");
+    }
+  } catch (error) {
+    console.error("PDF上传失败:", error);
+    alert("PDF上传失败！请确保后端服务正在运行。");
+  } finally {
+    isAnalyzing.value = false;
+    // 重置文件输入
+    target.value = '';
+  }
+};
 
 const handleStartAnalysis = async () => {
   if (rawInput.value.trim().length < 10) {
@@ -86,34 +126,68 @@ const handleStartAnalysis = async () => {
     // 1. 把文字打包
     const formData = new FormData();
     formData.append('text', rawInput.value);
+    // 👇 新增这一行：把界面的目标岗位一并打包发给后端
+    formData.append('target_jd', targetJD.value);
     
     // 2. 真正喊后端干活
     const res = await axios.post(`${API_BASE}/ocr`, formData);
     
     // 3. 把 AI 诊断好的结果拿回来
-    segments.value = res.data;
+    // 后端返回格式：{ sections: [...], assets: {...} }
+    if (res.data && res.data.sections) {
+      segments.value = res.data.sections;
+      
+      // 4. 同时获取5D资产
+      if (res.data.assets) {
+        refactoredAssets.value = {
+          star: res.data.assets.optimized_star || "",
+          letter: res.data.assets.cover_letter || "",
+          interview: res.data.assets.interview_questions || [],
+          jobs: res.data.assets.job_recommendations || [],
+          career: res.data.assets.career_advice || ""
+        };
+      }
+    } else {
+      segments.value = res.data;
+    }
     view.value = 'workspace';
   } catch (error) {
-    alert("联网失败！请检查后端 python main.py 是否启动了");
+    console.error("体检失败:", error);
+      alert("连接后端失败！请确保 Python 后端程序 (8080端口) 正在运行。");
   } finally {
     isAnalyzing.value = false;
   }
 };
 
 const startSqueeze = (index: number) => {
-  if (segments.value[index].status === 'success') return;
+  // 检查是否是切换到新的病灶（不是点击同一个）
+  const isNewSegment = activeIndex.value !== index;
+  
   activeIndex.value = index;
   const segment = segments.value[index];
   
-  refactoredAssets.value = { star: "", letter: "", interview: [], jobs: [], career: "" };
-  activeTab.value = 'star';
-
-  chatHistory.value = [
-    {
-      role: 'assistant',
-      content: `诊断报告：${segment.diagnosis}。这段经历写得太单薄了。请用大白话告诉我：你当时到底解决了什么痛点？有什么具体的数字指标能证明你的成绩？`
+  // 只有首次打开或切换到不同的病灶时，才重置对话历史
+  // 但保留已生成的5D资产，除非用户主动退出或重新分析
+  if (isNewSegment || chatHistory.value.length === 0) {
+    if (segment.status === 'success') {
+      chatHistory.value = [
+        {
+          role: 'assistant',
+          content: `这段经历非常优秀！${segment.diagnosis}。如果你想进一步优化，可以告诉我更多细节，我可以帮你打磨得更加出色。`
+        }
+      ];
+    } else {
+      chatHistory.value = [
+        {
+          role: 'assistant',
+          content: `诊断报告：${segment.diagnosis}。这段经历写得太单薄了。请用大白话告诉我：你当时到底解决了什么痛点？有什么具体的数字指标能证明你的成绩？`
+        }
+      ];
     }
-  ];
+  }
+  
+  // 始终切换到STAR标签页，但不清空已生成的资产
+  activeTab.value = 'star';
 };
 
 const handleSendMessage = async () => {
@@ -139,7 +213,7 @@ const handleSendMessage = async () => {
     if (data.status === 'result') {
       segments.value[activeIndex.value].text = data.optimized_star;
       segments.value[activeIndex.value].status = "success";
-      segments.value[activeIndex.value].diagnosis = "重构成功！文案已进化。";
+      segments.value[activeIndex.value].diagnosis = "重构成功！基因已优化。";
 
       refactoredAssets.value = {
         star: data.optimized_star || "",
@@ -157,24 +231,58 @@ const handleSendMessage = async () => {
       chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
     }
   } catch (error) {
-    chatHistory.value.push({ role: "assistant", content: "教练大脑断线了，请重试。" });
+    chatHistory.value.push({ role: "assistant", content: "抱歉，教练大脑暂时断线，请重试。" });
   } finally {
     isProcessing.value = false;
   }
 };
 
-const copyAsset = (text: string) => {
+const formatStarContent = (content: string): string => {
+  // 匹配 STAR 各部分并添加换行和样式
+  // 支持 Situation、Task、Action、Result 关键词
+  let result = content;
+  
+  // 在每个关键词前添加换行和样式（除了开头）
+  const keywords = ['Situation:', 'Task:', 'Action:', 'Result:'];
+  
+  keywords.forEach((keyword, index) => {
+    const regex = new RegExp(keyword, 'g');
+    if (index === 0) {
+      // 第一个关键词，保持在行首，加粗显示
+      result = result.replace(regex, `<br><span class="font-bold text-indigo-400">${keyword}</span>`);
+    } else {
+      // 其他关键词，添加换行和加粗
+      result = result.replace(regex, `<br><br><span class="font-bold text-indigo-400">${keyword}</span>`);
+    }
+  });
+  
+  // 移除开头多余的换行
+  result = result.replace(/^<br>/, '');
+  
+  return result;
+};
+
+const copyAsset = async (text: string) => {
   if (!text) return;
   try {
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
-    document.body.appendChild(textArea);
-    textArea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textArea);
+    await navigator.clipboard.writeText(text);
     alert("已成功复制到剪贴板！");
   } catch (err) {
-    console.error("复制失败", err);
+    // 降级方案：使用 textarea 方法
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      alert("已成功复制到剪贴板！");
+    } catch (e) {
+      console.error("复制失败", e);
+      alert("复制失败，请手动复制");
+    }
+    document.body.removeChild(textArea);
   }
 };
 
@@ -201,20 +309,37 @@ onMounted(() => {
         
         <div class="bg-white rounded-[3rem] shadow-2xl border-2 border-slate-100 overflow-hidden flex flex-col transition-all hover:border-indigo-100">
           <div class="text-left bg-indigo-50/50 p-6 rounded-3xl border border-indigo-100 m-4">
-            <label class="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2 block">
+            <label for="target-jd" class="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2 block">
               目标岗位 (JD) - 让诊断更精准
             </label>
             <input 
+              id="target-jd"
+              name="target-jd"
               v-model="targetJD"
               placeholder="输入你想投递的职位描述..."
               class="w-full bg-white border border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-400"
             />
           </div>
+          <label for="resume-text" class="sr-only">简历内容</label>
           <textarea 
+            id="resume-text"
+            name="resume-text"
             v-model="rawInput"
             class="w-full h-80 p-10 text-lg outline-none resize-none placeholder:text-slate-200 leading-relaxed"
             placeholder="在此粘贴您的全量旧简历文本，或者几段凌乱的工作描述..."
           ></textarea>
+          <div class="px-10 py-4 bg-indigo-50/30 border-t border-indigo-100 flex items-center justify-center">
+            <label class="flex items-center gap-3 cursor-pointer group">
+              <FileText class="w-5 h-5 text-indigo-400 group-hover:text-indigo-600 transition-colors" />
+              <span class="text-sm text-slate-500 font-medium group-hover:text-indigo-600 transition-colors">或上传 PDF 简历文件</span>
+              <input 
+                type="file" 
+                accept=".pdf" 
+                class="hidden"
+                @change="handlePdfUpload"
+              />
+            </label>
+          </div>
           <div class="p-8 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between">
             <div class="flex items-center gap-2 text-slate-400">
               <ShieldCheck class="w-4 h-4" />
@@ -227,7 +352,7 @@ onMounted(() => {
             >
               <Loader2 v-if="isAnalyzing" class="w-5 h-5 animate-spin" />
               <Activity v-else class="w-5 h-5" /> 
-              开启全盘体检
+              执行全盘分诊
             </button>
           </div>
         </div>
@@ -237,90 +362,41 @@ onMounted(() => {
     <!-- [第二阶段：工作台 (双屏协同)] -->
     <div v-else class="flex h-full">
       
-      <!-- 左侧：简历 X 光扫描仪 (诊断画布) -->
-      <section class="w-1/2 flex flex-col bg-white border-r border-slate-200 overflow-hidden" style="height: calc(100vh - 0px);">
-        <header class="p-4 border-b border-slate-100 flex items-center justify-between bg-white/80 backdrop-blur-md sticky top-0 z-20 flex-shrink-0">
-          <div class="flex items-center gap-3 cursor-pointer group" @click="view = 'landing'">
-            <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform">
+      <!-- 左侧：扫描诊断区 -->
+      <section class="w-[42%] flex flex-col border-r border-slate-200 bg-white shadow-inner" style="height: calc(100vh - 0px);">
+        <header class="p-6 border-b border-slate-100 flex items-center justify-between bg-white/80 backdrop-blur-md">
+          <div class="flex items-center gap-3 cursor-pointer" @click="view = 'landing'">
+            <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white">
               <FileText class="w-5 h-5" />
             </div>
-            <h1 class="font-black text-xl italic tracking-tighter uppercase">Ark_Xray</h1>
+            <h1 class="font-black text-xl italic tracking-tighter uppercase leading-none">ARK_XRAY</h1>
           </div>
-          <div class="flex bg-red-100 px-4 py-1.5 rounded-full items-center gap-2 shadow-sm border border-red-100">
+          <div class="flex bg-red-100 px-4 py-1.5 rounded-full items-center gap-2 shadow-sm">
             <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-            <span class="text-[10px] font-black text-red-600 uppercase tracking-widest">发现 {{ dangerCount }} 处严重病灶</span>
+            <span class="text-[10px] font-black text-red-600 uppercase tracking-widest">{{ dangerCount }} 处病灶</span>
           </div>
         </header>
 
-        <div class="flex-1 overflow-y-auto bg-slate-100 p-4" style="height: calc(100% - 80px);">
-          <div class="max-w-lg mx-auto">
-            <!-- 诊断画布容器 -->
-            <div class="bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden">
-              <!-- 画布标题栏 -->
-              <div class="bg-gradient-to-r from-indigo-900 to-indigo-700 px-6 py-4">
-                <div class="flex items-center gap-3">
-                  <div class="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
-                    <FileText class="w-5 h-5 text-white" />
+        <div class="flex-1 overflow-y-auto p-10 bg-slate-50/30 scrollbar-hide">
+          <div class="max-w-xl mx-auto space-y-8 pb-20">
+            <div class="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl relative">
+              <div class="absolute -top-3 left-10 bg-slate-900 text-white text-[10px] px-4 py-1 rounded-full font-bold uppercase tracking-widest italic">Diagnostic Canvas</div>
+              <div class="space-y-6 mt-4">
+                <div v-for="(seg, idx) in segments" :key="idx" @click="startSqueeze(idx)"
+                    :class="['group p-6 rounded-[2rem] cursor-pointer transition-all border-2 relative', 
+                    seg.status === 'danger' ? 'bg-red-50/40 border-red-100 hover:border-red-300' : 
+                    seg.status === 'success' ? 'bg-emerald-50/50 border-emerald-100 hover:border-emerald-300 shadow-sm evolution-flash' : 'bg-orange-50/40 border-orange-100 hover:border-orange-300',
+                    activeIndex === idx ? 'border-indigo-500 ring-4 ring-indigo-500/10 scale-[1.02]' : 'border-transparent']">
+                  <p :class="['text-[15px] leading-relaxed transition-colors', seg.status === 'success' ? 'text-emerald-800 font-bold italic' : 'text-slate-700']">
+                    {{ seg.text }}
+                  </p>
+                  <div class="mt-4 flex items-center gap-2">
+                    <AlertCircle v-if="seg.status === 'danger'" class="w-3.5 h-3.5 text-red-400" />
+                    <AlertCircle v-else-if="seg.status === 'warning'" class="w-3.5 h-3.5 text-orange-400" />
+                    <CheckCircle2 v-else class="w-3.5 h-3.5 text-emerald-500" />
+                    <span v-if="seg.status !== 'success'" :class="['text-[10px] font-black uppercase tracking-wider', seg.status === 'danger' ? 'text-red-500' : 'text-orange-500']">{{ seg.diagnosis }}</span>
+                    <span v-else class="text-[10px] font-black uppercase tracking-wider text-emerald-500">健康</span>
                   </div>
-                  <div>
-                    <h3 class="text-white font-black text-sm uppercase tracking-widest">诊断画布</h3>
-                    <p class="text-indigo-200 text-xs">Diagnosis Canvas</p>
-                  </div>
-                </div>
-              </div>
-              
-              <!-- 画布内容区 -->
-              <div class="p-6 space-y-4">
-                <div
-                  v-for="(seg, idx) in segments"
-                  :key="seg.id"
-                  @click="startSqueeze(idx)"
-                  :class="[
-                    'group p-5 rounded-2xl cursor-pointer transition-all border-2',
-                    seg.status === 'danger' ? 'bg-red-50 border-red-200 hover:border-red-300 hover:bg-red-100' :
-                    seg.status === 'success' ? 'bg-emerald-50 border-emerald-200 cursor-default' : 'bg-orange-50 border-orange-200 hover:border-orange-300 hover:bg-orange-100',
-                    activeIndex === idx ? 'border-indigo-500 ring-4 ring-indigo-500/20 shadow-lg' : ''
-                  ]"
-                >
-                  <div class="flex items-start gap-4">
-                    <!-- 状态图标 -->
-                    <div :class="['w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0',
-                      seg.status === 'success' ? 'bg-emerald-100' : seg.status === 'danger' ? 'bg-red-100' : 'bg-orange-100']">
-                      <CheckCircle2 v-if="seg.status === 'success'" class="w-7 h-7 text-emerald-600" />
-                      <AlertCircle v-else-if="seg.status === 'danger'" class="w-7 h-7 text-red-500" />
-                      <AlertCircle v-else class="w-7 h-7 text-orange-500" />
-                    </div>
-                    
-                    <!-- 内容区域 -->
-                    <div class="flex-1">
-                      <p :class="['text-lg leading-relaxed font-semibold', 
-                        seg.status === 'success' ? 'text-emerald-800' : seg.status === 'danger' ? 'text-red-800' : 'text-orange-800']">
-                        {{ seg.text }}
-                      </p>
-                      <div :class="['mt-3 p-3 rounded-xl',
-                        seg.status === 'success' ? 'bg-emerald-100/50' : 'bg-slate-100']">
-                        <span :class="['text-sm font-medium', 
-                          seg.status === 'success' ? 'text-emerald-700' : 'text-slate-700']">
-                          {{ seg.diagnosis }}
-                        </span>
-                      </div>
-                    </div>
-                    
-                    <!-- 箭头按钮 -->
-                    <div v-if="seg.status !== 'success'" class="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-all">
-                      <div class="bg-indigo-600 text-white p-3 rounded-full shadow-lg hover:bg-indigo-500">
-                        <ArrowRight class="w-5 h-5" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              <!-- 底部提示 -->
-              <div class="px-6 py-4 bg-slate-50 border-t border-slate-100">
-                <div class="flex items-center justify-center gap-2 text-slate-400">
-                  <div class="w-2 h-2 bg-indigo-400 rounded-full"></div>
-                  <span class="text-xs font-medium uppercase tracking-wider">已扫描到文档底部</span>
                 </div>
               </div>
             </div>
@@ -333,83 +409,36 @@ onMounted(() => {
         
         <!-- 对话舱 -->
         <div class="h-[55%] flex flex-col border-b border-white/5">
-          <header class="p-4 border-b border-white/5 flex items-center justify-between bg-black/20 backdrop-blur-md sticky top-0 z-20 flex-shrink-0">
+          <header class="p-6 border-b border-white/5 flex items-center justify-between bg-black/20 backdrop-blur-md">
             <div class="flex items-center gap-3">
               <Brain class="w-6 h-6 text-indigo-400" />
-              <div>
-                <h2 class="text-sm font-black uppercase tracking-widest">Architect_Coach</h2>
-                <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest">模式: 互动挤牙膏</p>
-              </div>
+              <h2 class="text-sm font-black uppercase tracking-widest text-slate-400 leading-none">Coach_Terminal</h2>
             </div>
-            <div class="flex items-center gap-2">
-              <button v-if="activeIndex !== null" @click="activeIndex = null" class="p-2.5 hover:bg-white/10 rounded-xl transition-all active:scale-90">
-                <Trash2 class="w-4 h-4 text-slate-500" />
-              </button>
-            </div>
+            <button v-if="activeIndex !== null" @click="activeIndex = null" class="p-2 hover:bg-white/10 rounded-xl transition-all">
+              <Trash2 class="w-4 h-4" />
+            </button>
           </header>
 
-          <div ref="chatContainer" class="flex-1 overflow-y-auto p-6 space-y-4 scrollbar-hide">
-            <!-- 引导状态 -->
-            <div v-if="activeIndex === null" class="h-full flex flex-col items-center justify-center text-center opacity-20">
-              <div class="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-6 border border-white/10 shadow-2xl">
-                <Target class="w-10 h-10" />
-              </div>
-              <p class="text-xs font-black uppercase tracking-[0.4em] leading-loose">
-                请在左侧点击<br/>标红的"病灶"进行重构手术
-              </p>
+          <div ref="chatContainer" class="flex-1 overflow-y-auto p-10 space-y-6 scrollbar-hide bg-gradient-to-b from-transparent to-black/20">
+            <div v-if="activeIndex === null" class="h-full flex flex-col items-center justify-center opacity-20 text-center">
+              <Target class="w-12 h-12 mb-4 mx-auto" />
+              <p class="text-xs font-black uppercase tracking-[0.4em]">点击左侧红名段落开启手术</p>
             </div>
-            
-            <!-- 聊天流 -->
             <div v-else v-for="(msg, i) in chatHistory" :key="i" :class="['flex', msg.role === 'user' ? 'justify-end' : 'justify-start']">
-              <div :class="['max-w-[85%] p-6 rounded-[2rem] text-[14px] leading-relaxed shadow-xl',
-                msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white/5 border border-white/10 text-slate-200 rounded-bl-none']">
+              <div :class="['max-w-[85%] p-5 rounded-[1.5rem] text-[14px] leading-relaxed shadow-xl animate-in slide-in-from-bottom-2', 
+                  msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none shadow-indigo-900/40' : 'bg-white/5 border border-white/10 text-slate-200 rounded-bl-none shadow-black/40']">
                 {{ msg.content }}
               </div>
             </div>
-
-            <!-- 教练思考中 -->
-            <div v-if="isProcessing" class="flex justify-start">
-              <div class="bg-white/5 p-5 rounded-[2.5rem] flex items-center gap-4 border border-white/10 shadow-xl">
-                <div class="flex gap-1.5">
-                  <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce"></div>
-                  <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
-                  <div class="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div>
-                </div>
-                <span class="text-[10px] font-black text-slate-500 uppercase tracking-widest">教练正在深度解析大白话...</span>
-              </div>
-            </div>
+            <div v-if="isProcessing" class="text-[10px] font-black text-slate-500 uppercase px-4 animate-pulse">AI 教练思考中...</div>
           </div>
 
-          <!-- 交互输入区 (大白话通道) -->
-          <div class="p-8 border-t border-white/5 bg-black/40 backdrop-blur-xl">
-            <div :class="['relative transition-all duration-500', activeIndex === null ? 'opacity-10 pointer-events-none grayscale blur-sm' : 'opacity-100']">
-              <textarea
-                  v-model="userInput"
-                  @keydown.enter.prevent="handleSendMessage"
-                  placeholder="在此输入大白话补充细节：其实那个项目我还带了3个人，提升了20%的效率..."
-                  class="w-full h-32 bg-white/5 border border-white/10 rounded-[2rem] p-6 pr-20 outline-none focus:ring-4 focus:ring-indigo-500/20 resize-none text-[15px] transition-all placeholder:text-slate-600 leading-relaxed"
-              ></textarea>
-              <button
-                  @click="handleSendMessage"
-                  :disabled="isProcessing || !userInput.trim()"
-                  class="absolute right-4 bottom-4 p-4 bg-indigo-600 rounded-2xl hover:bg-indigo-500 active:scale-95 disabled:opacity-20 transition-all shadow-xl shadow-indigo-600/30"
-              >
-                <Send class="w-5 h-5 text-white" />
+          <div class="p-6 bg-black/40">
+            <div :class="['relative transition-all duration-500', activeIndex === null ? 'opacity-10 pointer-events-none' : 'opacity-100']">
+              <textarea v-model="userInput" @keydown.enter.prevent="handleSendMessage" placeholder="大白话通道：当时我处理了多少量级的数据，带了几个实习生..." class="w-full h-20 bg-white/5 border border-white/10 rounded-[1.5rem] p-5 pr-20 outline-none text-[15px] resize-none focus:ring-4 focus:ring-indigo-500/20"></textarea>
+              <button @click="handleSendMessage" :disabled="isProcessing || !userInput.trim()" class="absolute right-4 bottom-4 p-3 bg-indigo-600 rounded-xl hover:bg-indigo-500 active:scale-95 shadow-xl shadow-indigo-600/30">
+                <Send class="w-4 h-4 text-white" />
               </button>
-            </div>
-            <div class="mt-6 flex items-center justify-between text-[10px] font-black text-slate-600 uppercase tracking-[0.2em] px-2">
-              <div class="flex items-center gap-4">
-                <div class="flex items-center gap-1.5 text-indigo-400">
-                  <div class="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-pulse"></div>
-                  Session: Active
-                </div>
-                <div class="flex items-center gap-1.5 cursor-pointer hover:text-slate-400 transition-colors">
-                  <Mic class="w-3 h-3" /> 开启语音录入
-                </div>
-              </div>
-              <div class="flex items-center gap-2">
-                <Sparkles class="w-3 h-3 text-indigo-400" /> Powered by DeepSeek-V3
-              </div>
             </div>
           </div>
         </div>
@@ -420,23 +449,31 @@ onMounted(() => {
             <button v-for="tab in tabs" :key="tab.id" @click="activeTab = tab.id"
                 :class="['flex-1 py-4 flex flex-col items-center gap-1 transition-all border-b-2', 
                 activeTab === tab.id ? 'border-indigo-500 text-white bg-indigo-500/10' : 'border-transparent text-slate-500 hover:text-slate-300']">
-              <component :is="tab.id === 'star' ? Sparkles : tab.id === 'letter' ? Mail : tab.id === 'interview' ? MessageCircleQuestion : tab.id === 'jobs' ? Briefcase : Map" class="w-4 h-4" />
+              <Sparkles v-if="tab.id === 'star'" class="w-4 h-4" />
+              <Mail v-else-if="tab.id === 'letter'" class="w-4 h-4" />
+              <MessageCircleQuestion v-else-if="tab.id === 'interview'" class="w-4 h-4" />
+              <Briefcase v-else-if="tab.id === 'jobs'" class="w-4 h-4" />
+              <Map v-else class="w-4 h-4" />
               <span class="text-[9px] font-black uppercase tracking-widest">{{tab.label}}</span>
             </button>
           </nav>
 
           <div class="flex-1 overflow-y-auto p-8 scrollbar-hide">
-            <div v-if="!refactoredAssets.star" class="h-full flex items-center justify-center opacity-10 italic text-slate-400">完成重构后，在此处解锁您的 5 维求职资产包</div>
-            <div v-else class="animate-in fade-in slide-in-from-right-4 duration-500">
+            <!-- 只要有任何资产已生成，就显示资产卡片 -->
+            <div v-if="refactoredAssets.star || refactoredAssets.letter || refactoredAssets.interview.length || refactoredAssets.jobs.length || refactoredAssets.career" class="animate-in fade-in slide-in-from-right-4 duration-500">
               
               <div v-if="activeTab === 'star'" class="space-y-4">
-                <div class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 leading-relaxed italic">"{{ refactoredAssets.star }}"</div>
-                <button @click="copyAsset(refactoredAssets.star)" class="text-[10px] font-black text-indigo-400 hover:text-indigo-300 transition-colors uppercase tracking-widest flex items-center gap-1">一键复制 STAR 经历</button>
+                <div v-if="refactoredAssets.star" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 leading-relaxed">
+                  <div v-html="formatStarContent(refactoredAssets.star)"></div>
+                </div>
+                <div v-else class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-500 text-center">当前模块暂无 STAR 改写</div>
+                <button v-if="refactoredAssets.star" @click="copyAsset(refactoredAssets.star)" class="text-[10px] font-black text-indigo-400 hover:text-indigo-300 transition-colors uppercase tracking-widest flex items-center gap-1">一键复制 STAR 经历</button>
               </div>
               
               <div v-if="activeTab === 'letter'" class="space-y-4">
-                <div class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 whitespace-pre-wrap leading-relaxed">{{ refactoredAssets.letter }}</div>
-                <button @click="copyAsset(refactoredAssets.letter)" class="text-[10px] font-black text-indigo-400 hover:text-indigo-300 uppercase tracking-widest flex items-center gap-1">复制求职信</button>
+                <div v-if="refactoredAssets.letter" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-300 whitespace-pre-wrap leading-relaxed min-h-[150px]">{{ refactoredAssets.letter }}</div>
+                <div v-else class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-500 text-center">未生成求职信</div>
+                <button v-if="refactoredAssets.letter" @click="copyAsset(refactoredAssets.letter)" class="text-[10px] font-black text-indigo-400 hover:text-indigo-300 uppercase tracking-widest flex items-center gap-1">复制求职信</button>
               </div>
               
               <div v-if="activeTab === 'interview'" class="space-y-3">
@@ -444,17 +481,21 @@ onMounted(() => {
                   <span class="text-red-400 font-black mt-0.5">Q{{ i + 1 }}</span>
                   <span class="text-slate-300 leading-relaxed">{{q}}</span>
                 </div>
+                <div v-if="!refactoredAssets.interview.length" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-500 text-center">未生成面试问题</div>
               </div>
               
               <div v-if="activeTab === 'jobs'" class="grid grid-cols-2 gap-4">
                 <div v-for="job in refactoredAssets.jobs" :key="job" class="p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-center font-bold text-indigo-200">{{job}}</div>
+                <div v-if="!refactoredAssets.jobs.length" class="bg-white/5 p-6 rounded-2xl border border-white/10 text-slate-500 text-center">未生成职位推荐</div>
               </div>
               
               <div v-if="activeTab === 'career'" class="bg-blue-900/20 p-6 rounded-2xl border border-blue-500/30 border-dashed text-slate-300 leading-relaxed">
-                {{ refactoredAssets.career }}
+                {{ refactoredAssets.career || "未生成职业规划建议" }}
               </div>
 
             </div>
+            <!-- 初始状态：还没有生成任何资产 -->
+            <div v-else class="h-full flex items-center justify-center opacity-10 italic text-slate-400">完成重构后，在此处解锁您的 5 维求职资产包</div>
           </div>
         </div>
 

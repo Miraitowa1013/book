@@ -218,15 +218,18 @@ architect_service = ResumeArchitectService()
 
 class ResumeCoachService:
     """
-    Resume Coach Service: 
-    Responsible for diagnosis, interactive questioning (squeezing data), 
+    Resume Coach Service:
+    Responsible for diagnosis, interactive questioning (squeezing data),
     and final STAR refactoring.
     """
     def __init__(self):
-        # Using DeepSeek-V3 via SiliconFlow API
-        self.api_key = "" # API Key will be injected at runtime
+        import ssl
+        self.api_key = "sk-tnzuxxkuptjwcmeoeexkjdowbnbdqsnclxexsejagidgjfug"
         self.api_url = "https://api.siliconflow.cn/v1/chat/completions"
         self.model = "deepseek-ai/DeepSeek-V3"
+        self.ssl_context = ssl.create_default_context()
+        self.ssl_context.check_hostname = False
+        self.ssl_context.verify_mode = ssl.CERT_NONE
 
     async def coach_chat(
         self, 
@@ -283,11 +286,10 @@ class ResumeCoachService:
             delays = [1, 2, 4, 8, 16]
             for i in range(5):
                 try:
-                    response = await asyncio.to_thread(
-                        lambda: requests.post(self.api_url, json=payload, headers=headers, timeout=60.0)
-                    )
-                    if response.status_code == 200:
-                        return response.json()
+                    with httpx.Client(timeout=httpx.Timeout(60.0, connect=30.0), trust_env=False) as client:
+                        response = client.post(self.api_url, json=payload, headers=headers)
+                        if response.status_code == 200:
+                            return response.json()
                 except Exception as e:
                     if i == 4: raise e
                     await asyncio.sleep(delays[i])

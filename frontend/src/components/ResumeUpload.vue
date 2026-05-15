@@ -188,15 +188,15 @@
                 </div>
               </div>
 
-              <div v-if="selectedIdx !== null && selectedSection" class="focus-card">
+              <div v-if="selectedIdx !== null" class="focus-card">
                 <div class="focus-top">
                   <div>
                     <div class="block-label">当前模块</div>
-                    <div class="focus-title">{{ selectedSection.name }}</div>
+                    <div class="focus-title">{{ selectedSection?.name || sections[selectedIdx]?.name }}</div>
                   </div>
 
                   <button
-                    v-if="selectedSection.rewrite_example"
+                    v-if="selectedSection?.rewrite_example"
                     class="copy-btn"
                     @click="copyRewrite"
                   >
@@ -208,7 +208,7 @@
                   <div class="info-card info-card-problem">
                     <div class="info-title">存在的问题</div>
 
-                    <ul v-if="selectedSection.issues?.length" class="issue-list">
+                    <ul v-if="selectedSection?.issues?.length" class="issue-list">
                       <li
                         v-for="(x, i) in selectedSection.issues"
                         :key="i"
@@ -225,7 +225,7 @@
                     <div class="info-title">优化建议</div>
 
                     <ul
-                      v-if="selectedSection.recommendations?.length"
+                      v-if="selectedSection?.recommendations?.length"
                       class="recommend-list"
                     >
                       <li
@@ -242,16 +242,11 @@
 
                 <div class="rewrite-card">
                   <div class="info-title">改写示例</div>
-                  <div v-if="selectedSection.rewrite_example" class="rewrite-body">
+                  <div v-if="selectedSection?.rewrite_example" class="rewrite-body">
                     {{ selectedSection.rewrite_example }}
                   </div>
                   <div v-else class="subtle-text">当前模块暂无改写示例</div>
                 </div>
-              </div>
-
-              <div v-else class="empty-card">
-                <div class="empty-title">请选择左侧模块</div>
-                <div class="empty-desc">选择后即可查看该模块的详细建议。</div>
               </div>
             </div>
 

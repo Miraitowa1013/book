@@ -2,24 +2,16 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
-import requests
+import httpx
 
 
 def _config_path_default() -> str:
-    # backend/app/services/siliconflow_client.py -> backend/config/siliconflow.json
     return os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "siliconflow.json"
     )
 
 
 def _load_siliconflow_config() -> Dict[str, Any]:
-    """
-    课程演示用：把硅基流动相关信息集中放到一个 JSON 文件里。
-
-    优先级：
-    1) 环境变量（SILICONFLOW_API_KEY / SILICONFLOW_BASE_URL / SILICONFLOW_MODEL）
-    2) 配置文件（backend/config/siliconflow.json）
-    """
     cfg_path = os.getenv("SILICONFLOW_CONFIG_PATH", "").strip() or _config_path_default()
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
@@ -34,11 +26,6 @@ def _load_siliconflow_config() -> Dict[str, Any]:
 
 
 class SiliconFlowClient:
-    """
-    适配“类 OpenAI chat/completions”风格接口。
-    你在课程中可以替换为你实际使用的硅基流动模型/端点。
-    """
-
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -88,30 +75,28 @@ class SiliconFlowClient:
             payload.update(extra)
 
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=120)
-        except requests.RequestException as e:
+            with httpx.Client(timeout=httpx.Timeout(120.0, connect=30.0), trust_env=False) as client:
+                resp = client.post(url, headers=headers, json=payload)
+        except httpx.RequestError as e:
             raise RuntimeError(f"硅基流动请求异常: {e}") from e
 
-        # 让课程里更容易定位问题：把硅基流动返回的 body 透传出来
-        if not resp.ok:
+        if not resp.is_success:
             resp_text = ""
             try:
                 resp_text = (resp.text or "").strip()
             except Exception:
                 resp_text = ""
-            resp_text = resp_text[:5000]  # 避免把超长内容塞爆前端/日志
+            resp_text = resp_text[:5000]
             raise RuntimeError(
-                f"硅基流动返回错误: HTTP {resp.status_code} {resp.reason}; "
+                f"硅基流动返回错误: HTTP {resp.status_code} {resp.reason_phrase}; "
                 f"body={resp_text or '(空响应)'}; model={self.model}"
             )
 
         data = resp.json()
 
-        # OpenAI 风格
         try:
             return data["choices"][0]["message"]["content"]
         except Exception:
-            # 尝试从其它字段中兜底
             for k in ["output_text", "text", "result"]:
                 if k in data and isinstance(data[k], str):
                     return data[k]
@@ -120,12 +105,27 @@ class SiliconFlowClient:
 
 def extract_json_object(text: str) -> Any:
     """
-    模型偶尔会在 JSON 前后夹杂解释，这个函数会尽量“拎出”第一段 JSON 对象。
+    模型偶尔会在 JSON 前后夹杂解释，这个函数会尽量"拎出"第一段 JSON 对象或数组。
     """
     text = text.strip()
-    first = text.find("{")
-    last = text.rfind("}")
-    if first == -1 or last == -1 or last <= first:
-        raise ValueError("未找到可解析的 JSON 对象片段")
-    return json.loads(text[first : last + 1])
-
+    
+    # 移除可能的 markdown 代码块标记
+    text = text.replace('```json', '').replace('```', '').strip()
+    
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    first_bracket = text.find("[")
+    last_bracket = text.rfind("]")
+    
+    # 优先找数组格式 [...]
+    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+        if first_brace == -1 or first_bracket < first_brace:
+            json_str = text[first_bracket : last_bracket + 1]
+            return json.loads(json_str)
+    
+    # 找对象格式 {...}
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        json_str = text[first_brace : last_brace + 1]
+        return json.loads(json_str)
+    
+    raise ValueError("未找到可解析的 JSON 对象或数组片段")

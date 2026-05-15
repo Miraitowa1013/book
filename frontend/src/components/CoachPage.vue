@@ -51,16 +51,21 @@ onMounted(scrollToBottom);
 const startSqueeze = (index: number) => {
   if (segments.value[index].status === 'success') return;
   
+  // 如果当前已有活跃对话且切换到新病灶，保持对话界面不消失，只是切换目标
+  const isNewSegment = activeIndex.value !== index;
+  
   activeIndex.value = index;
   const segment = segments.value[index];
   
-  // 初始化教练对话
-  chatHistory.value = [
-    {
-      role: "assistant",
-      content: `你好！我看了一下你这段经历："${segment.text}"。${segment.diagnosis} 想要把它改得让 HR 眼前一亮，你需要告诉我：你当时处理的数据量级大概是多少？或者你的工作让系统性能提升了百分之几？`
-    }
-  ];
+  // 只有首次打开或切换到新病灶时才初始化对话
+  if (isNewSegment || chatHistory.value.length === 0) {
+    chatHistory.value = [
+      {
+        role: "assistant",
+        content: `你好！我看了一下你这段经历："${segment.text}"。${segment.diagnosis} 想要把它改得让 HR 眼前一亮，你需要告诉我：你当时处理的数据量级大概是多少？或者你的工作让系统性能提升了百分之几？`
+      }
+    ];
+  }
 };
 
 // --- 4. 核心功能：右侧对话式"挤牙膏" ---

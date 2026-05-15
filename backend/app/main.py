@@ -6,12 +6,21 @@ from app.api import resume_routes
 
 app = FastAPI(title="ARK_RESUME_API (简历架构师)")
 
-# 2. [小白必看] 配置跨域：允许前端网页（通常运行在 5173 端口）访问后端（8000 端口）
-# 如果没有这段代码，浏览器会因为安全安全机制拦截你的请求
+# 2. [小白必看] 终极 CORS 配置
+# 明确指定你可能用到的前端地址
+origins = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",  # 👈 确保把你现在的地址加进去
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:5175",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # 在开发环境允许所有来源，确保连接顺畅
-    allow_credentials=True,
+    allow_origins=origins,  # 👈 使用具体的列表，而不是 ["*"]
+    allow_credentials=True, # 👈 如果使用了具体的 origins，这里可以为 True
     allow_methods=["*"],
     allow_headers=["*"],
 )

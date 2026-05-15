@@ -1,15 +1,142 @@
+import json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
-import fitz  # PyMuPDF
+import fitz
+import httpx
 
-from app.services.siliconflow_client import SiliconFlowClient, extract_json_object
+
+def _config_path_default() -> str:
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "siliconflow.json"
+    )
+
+
+def _load_siliconflow_config() -> Dict[str, Any]:
+    cfg_path = os.getenv("SILICONFLOW_CONFIG_PATH", "").strip() or _config_path_default()
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    return {}
+
+
+class SiliconFlowClient:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> None:
+        cfg = _load_siliconflow_config()
+
+        env_api_key = os.getenv("SILICONFLOW_API_KEY", "").strip()
+        env_base_url = os.getenv("SILICONFLOW_BASE_URL", "").strip()
+        env_model = os.getenv("SILICONFLOW_MODEL", "").strip()
+
+        self.api_key = (api_key or env_api_key or cfg.get("apiKey") or cfg.get("api_key") or "").strip()
+        self.base_url = (
+            base_url
+            or env_base_url
+            or cfg.get("baseUrl")
+            or cfg.get("base_url")
+            or "https://api.siliconflow.cn/v1"
+        ).strip()
+        self.model = (model or env_model or cfg.get("model") or cfg.get("modelName") or "").strip() or "deepseek-ai/DeepSeek-V3"
+
+        if not self.api_key:
+            raise RuntimeError(
+                "SILICONFLOW API Key 未设置：请配置环境变量或填写 backend/config/siliconflow.json"
+            )
+
+    def chat(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        url = self.base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if extra:
+            payload.update(extra)
+
+        try:
+            with httpx.Client(timeout=httpx.Timeout(90.0, connect=10.0), trust_env=False) as client:
+                resp = client.post(url, headers=headers, json=payload)
+        except httpx.RequestError as e:
+            raise RuntimeError(f"硅基流动请求异常: {e}") from e
+
+        if not resp.is_success:
+            resp_text = ""
+            try:
+                resp_text = (resp.text or "").strip()
+            except Exception:
+                resp_text = ""
+            resp_text = resp_text[:5000]
+            raise RuntimeError(
+                f"硅基流动返回错误: HTTP {resp.status_code} {resp.reason_phrase}; "
+                f"body={resp_text or '(空响应)'}; model={self.model}"
+            )
+
+        data = resp.json()
+
+        try:
+            return data["choices"][0]["message"]["content"]
+        except Exception:
+            for k in ["output_text", "text", "result"]:
+                if k in data and isinstance(data[k], str):
+                    return data[k]
+            raise RuntimeError(f"无法解析硅基流动响应: {data}")
+
+
+def extract_json_object(text: str) -> Any:
+    """
+    健壮的 JSON 解析，支持多种格式
+    """
+    if not text:
+        raise ValueError("输入文本为空")
+
+    text = text.strip()
+
+    text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*```$', '', text)
+
+    json_patterns = [
+        (r'\{[\s\S]*\}', 'object'),
+        (r'\[[\s\S]*\]', 'array'),
+    ]
+
+    for pattern, json_type in json_patterns:
+        match = re.search(pattern, text)
+        if match:
+            json_str = match.group(0)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                continue
+
+    raise ValueError(f"无法解析 JSON: {text[:200]}")
 
 
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     """
-    从 PDF 抽取文本（尽量覆盖“文字型简历”）。
-    如果你的简历是纯图片/扫描件，建议在课程里再扩展“本地OCR或模型视觉OCR”。
+    从 PDF 抽取文本
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     parts: List[str] = []
@@ -19,105 +146,111 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     return text
 
 
-def truncate_for_llm(text: str, max_chars: int = 12000) -> str:
+def truncate_for_llm(text: str, max_chars: int = 8000) -> str:
+    """
+    截断过长的文本，减少 token 消耗以提升速度
+    """
     text = text.strip()
     if len(text) <= max_chars:
         return text
-    # 保留开头和结尾（简历一般前半是教育/经历）
     head = text[: int(max_chars * 0.7)]
     tail = text[-int(max_chars * 0.3) :]
     return head + "\n...\n" + tail
 
 
-def _diagnose_segment(content: str) -> dict:
+def llm_extract_sections(resume_text: str, target_jd: str = "") -> Any:
     """
-    简单的诊断逻辑：根据内容判断状态和诊断信息
+    【ARK_XRAY 核心大脑】：
+    一次调用完成诊断和5D资产生成，速度更快，输出更稳定
     """
-    content = content.lower()
-    
-    # 检查是否有量化数据
-    has_numbers = any(c.isdigit() for c in content)
-    has_metrics = any(word in content for word in ['优化', '提升', '降低', '增长', '减少', '提高', '完成', '实现', '负责'])
-    
-    if has_numbers and has_metrics:
-        return {"status": "success", "diagnosis": "【健康】内容包含量化指标，符合专业简历标准。"}
-    elif has_metrics:
-        return {"status": "warning", "diagnosis": "【病灶：无指标】描述了工作内容，但缺少具体数据支撑。"}
-    else:
-        return {"status": "danger", "diagnosis": "【病灶：流水账】仅描述了职责，未体现技术难度、业务增量或量化产出。"}
+    client = SiliconFlowClient()
+    truncated = truncate_for_llm(resume_text)
 
+    jd_info = f"\n【目标岗位】：{target_jd}" if target_jd else ""
 
-def llm_extract_sections(resume_text: str) -> Any:
-    """
-    用硅基流动对“简历内容”做结构化抽取（你在课里可称为 OCR/解析接口）。
-    输出必须是 JSON，前端/后端才能稳定解析。
-    返回格式：[{id, text, status, diagnosis}, ...]
-    """
+    system_prompt = """你是一个世界顶尖的技术猎头和简历架构师。
+
+你的任务：
+1. 将简历文本拆分为逻辑段落并诊断
+2. 生成5D求职资产包
+
+【诊断规则】：
+1. 姓名/电话/邮箱等个人信息：status=success, diagnosis="个人联系方式，无需优化"
+2. 个人概况：分析是否清晰有力、突出核心竞争力
+3. 教育背景：分析专业对标度、GPA竞争力、荣誉含金量
+4. 工作/项目经历：分析技术栈深度、业务复杂度、量化成果
+5. status: danger/warning/success
+
+【5D资产】：
+- optimized_star: STAR法则重写（中文）
+- cover_letter: 求职信100字内（中文）
+- interview_questions: 3个面试问题+破局思路（中文）
+- job_recommendations: 3个岗位推荐（中文）
+- career_advice: 1-3年职业规划（中文）
+
+【目标岗位】：""" + (target_jd if target_jd else "未指定") + """
+
+【输出格式】（严格JSON，无markdown）：
+{
+  "sections": [{"text": "原文", "status": "success/warning/danger", "diagnosis": "诊断"}],
+  "assets": {
+    "optimized_star": "STAR内容",
+    "cover_letter": "求职信",
+    "interview_questions": ["问题1", "问题2", "问题3"],
+    "job_recommendations": ["推荐1", "推荐2", "推荐3"],
+    "career_advice": "职业规划"
+  }
+}"""
+
+    user_prompt = f"简历分析：{jd_info}\n\n{truncated}"
+
     try:
-        client = SiliconFlowClient()
-        truncated = truncate_for_llm(resume_text)
-
-        system = (
-            "你是资深招聘官与简历编辑。"
-            "你的任务是从简历文本中识别出主要模块，并返回结构化 JSON。"
-            "不要输出任何与 JSON 无关的文字。"
-        )
-        user = f"""
-请读取下面的简历文本，并识别模块（尽量覆盖但不强行杜撰）： 
-1) 基本信息（姓名/联系方式/求职意向/教育背景概览）
-2) 教育背景
-3) 实习经历（含项目型实习）
-4) 项目经历（含个人/团队项目）
-5) 技能栈/技术能力
-6) 证书/获奖（如有）
-7) 自我评价/其他（如有）
-
-输出 JSON，格式如下：
-{{
-  "sections": [
-    {{
-      "name": "模块名称（中文，尽量用上面给的类别）",
-      "content": "该模块对应的原文内容摘录/摘要"
-    }}
-  ],
-  "notes": "简短说明：识别过程中遇到的缺失/不确定点"
-}}
-
-简历文本如下（可能包含噪声/排版）：
-```text
-{truncated}
-```
-"""
-
-        content = client.chat(
+        response_content = client.chat(
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
-            temperature=0.2,
-            max_tokens=1800,
+            temperature=0.3,
+            max_tokens=3000
         )
-        parsed = extract_json_object(content)
-        
-        # 转换为前端期望的格式：[{id, text, status, diagnosis}, ...]
-        if isinstance(parsed, dict) and isinstance(parsed.get("sections"), list):
-            result = []
-            for idx, section in enumerate(parsed["sections"]):
-                diagnosis = _diagnose_segment(section.get("content", ""))
-                result.append({
-                    "id": idx + 1,
-                    "text": section.get("content", ""),
-                    "status": diagnosis["status"],
-                    "diagnosis": diagnosis["diagnosis"]
-                })
-            return result
-        return parsed
-    except Exception as e:
-        # 模拟模式：当硅基流动不可用时返回模拟数据
-        print(f"硅基流动不可用，使用模拟数据: {e}")
-        return [
-            {"id": 1, "text": "在XX公司负责电商后台的日常功能开发。", "status": "danger", "diagnosis": "【病灶：流水账】仅描述了职位，没有体现技术难度、业务增量或量化产出。"},
-            {"id": 2, "text": "优化了项目性能，通过重构提升了网页加载速度。", "status": "warning", "diagnosis": "【病灶：无指标】优化和提升是空话，需要具体的数据。"},
-            {"id": 3, "text": "熟练掌握 Vue.js、Python 和 MySQL 技术栈。", "status": "success", "diagnosis": "【健康】技能描述清晰。"}
-        ]
 
+        parsed_result = extract_json_object(response_content)
+
+        sections = []
+        sections_data = parsed_result.get("sections", [])
+        if isinstance(sections_data, list):
+            for idx, item in enumerate(sections_data):
+                if isinstance(item, dict):
+                    sections.append({
+                        "id": idx + 1,
+                        "text": str(item.get("text", "")),
+                        "status": str(item.get("status", "warning")),
+                        "diagnosis": str(item.get("diagnosis", ""))
+                    })
+
+        if not sections:
+            sections = [{"id": 1, "text": truncated[:200], "status": "warning", "diagnosis": "未能识别简历段落，请重试"}]
+
+        assets_data = parsed_result.get("assets", {})
+        if not isinstance(assets_data, dict):
+            assets_data = {}
+
+        assets = {
+            "optimized_star": str(assets_data.get("optimized_star", "")),
+            "cover_letter": str(assets_data.get("cover_letter", "")),
+            "interview_questions": assets_data.get("interview_questions", []) if isinstance(assets_data.get("interview_questions"), list) else [],
+            "job_recommendations": assets_data.get("job_recommendations", []) if isinstance(assets_data.get("job_recommendations"), list) else [],
+            "career_advice": str(assets_data.get("career_advice", ""))
+        }
+
+        return {
+            "sections": sections,
+            "assets": assets
+        }
+
+    except Exception as e:
+        print(f"分析异常: {e}")
+        return {
+            "sections": [{"id": 1, "text": truncated[:200], "status": "warning", "diagnosis": "分析服务暂时异常，请重试"}],
+            "assets": {"optimized_star": "", "cover_letter": "", "interview_questions": [], "job_recommendations": [], "career_advice": ""}
+        }
