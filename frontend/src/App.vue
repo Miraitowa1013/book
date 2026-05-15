@@ -501,6 +501,13 @@ onMounted(() => {
             </div>
           </div>
         </div>
+        
+        <!-- 导出按钮 -->
+        <footer class="p-6 border-t border-slate-100 bg-white sticky bottom-0 z-10">
+          <button @click="copyFinalResume" class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 active:scale-95 transition-all">
+            <CheckCircle2 class="w-5 h-5" /> 导出重构后的全量简历
+          </button>
+        </footer>
       </section>
 
       <!-- 右侧：AI 教练终端 (交互挤牙膏区 + 5D 资产) -->
