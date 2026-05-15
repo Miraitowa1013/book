@@ -668,7 +668,7 @@ onMounted(() => {
     <!-- 导出预览模态框 -->
     <div v-if="showExportPreview" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-8 print:hidden">
       <div class="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-300">
-        <!-- 预览操作栏 -->
+        <!-- 预览操作栏 (打印时自动消失) -->
         <div class="flex justify-between items-center mb-10 pb-6 border-b border-slate-100 px-8 pt-8 sticky top-0 bg-white/90 backdrop-blur z-10">
           <button @click="showExportPreview = false" class="px-6 py-2.5 text-slate-500 hover:text-slate-800 font-bold rounded-xl hover:bg-slate-50 transition-colors">
             ← 返回继续优化
@@ -678,25 +678,18 @@ onMounted(() => {
           </button>
         </div>
 
-        <!-- 极简大厂简历模板 -->
-        <div class="px-8 pb-8 overflow-y-auto max-h-[calc(90vh-120px)] print:overflow-visible">
-          <div class="prose max-w-none text-slate-900 print:prose-lg">
-            <h1 class="text-3xl font-black mb-8 tracking-tight border-b-2 border-slate-900 pb-4 uppercase">Profile</h1>
+        <!-- 真正的极简简历模板 -->
+        <!-- 原汁原味呈现：好的坏的段落都回到本来的顺序，但坏的已经被治好 -->
+        <div class="px-8 pb-8 overflow-y-auto max-h-[calc(90vh-120px)]">
+          <div class="max-w-none text-slate-900">
+            <h1 class="text-3xl font-black mb-2 text-center tracking-[0.5em]">个人简历</h1>
+            <div class="h-1 w-full bg-slate-900 mb-8"></div>
 
-            <!-- 如果用户输入了目标JD，在顶部显示目标岗位 -->
-            <div v-if="targetJD" class="mb-10 p-5 bg-slate-50 rounded-xl text-sm text-slate-600 border border-slate-100">
-              <span class="font-bold text-slate-800">🎯 目标投递岗位：</span> {{ targetJD }}
-            </div>
-
-            <h2 class="text-lg font-black mt-8 mb-6 uppercase tracking-widest text-slate-400">Experience / 项目重构清单</h2>
-            <div class="space-y-6">
-              <div v-for="(seg, idx) in segments" :key="idx" class="text-[15px] leading-relaxed">
-                <!-- 已经成功被 AI 重构的段落（黄金字体） -->
-                <p v-if="seg.status === 'success'" class="font-bold relative pl-5 before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:bg-indigo-600 before:rounded-full text-slate-800">
-                  {{ seg.text }}
-                </p>
-                <!-- 尚未重构的原段落（灰色弱化） -->
-                <p v-else class="text-slate-500 relative pl-5 before:content-[''] before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:bg-slate-300 before:rounded-full">
+            <div class="space-y-4">
+              <div v-for="(seg, idx) in segments" :key="idx" class="text-[14px] leading-relaxed text-justify">
+                <!-- 直接输出最终的文本格式，不带任何 AI 诊断的红点或绿点标记 -->
+                <!-- 注意：这里我们使用 whitespace-pre-wrap 来保证原始输入可能带有的换行 -->
+                <p class="text-slate-800 whitespace-pre-wrap font-medium">
                   {{ seg.text }}
                 </p>
               </div>
