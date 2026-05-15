@@ -172,23 +172,17 @@ const startSqueeze = (index: number) => {
   activeIndex.value = index;
   const segment = segments.value[index];
   
-  // 每次切换病灶都重新加载数据（不再依赖isNewSegment判断）
-  if (segment.assets) {
-    // 如果该病灶已有资产（通过AI教练生成的），加载其资产数据（优先显示完善后的版本）
-    refactoredAssets.value = segment.assets;
-  } else {
-    // 加载分析阶段生成的初始5D资产
-    refactoredAssets.value = {
-      star: segment.star || (segment.status === 'success' ? "这段经历非常优秀！无需额外优化。" : ""),
-      letter: segment.cover_letter || "点击下方输入框，描述你的经历以生成个性化求职信",
-      interview: segment.interview_questions && segment.interview_questions.length > 0 ? segment.interview_questions : ["请描述你的经历，我将为你生成面试问题"],
-      jobs: segment.job_recommendations && segment.job_recommendations.length > 0 ? segment.job_recommendations : ["请描述你的经历，我将为你推荐匹配岗位"],
-      career: segment.career_advice || "请描述你的经历，我将为你制定职业规划"
-    };
-  }
+  // ✅ 强制重置资产为空，等待AI教练生成
+  // 只有在 handleSendMessage 返回 status === 'result' 时才赋值
+  refactoredAssets.value = {
+    star: "",
+    letter: "",
+    interview: [],
+    jobs: [],
+    career: ""
+  };
   
   // 只有首次打开或切换到不同的病灶时，才重置对话历史
-  // 但保留已生成的5D资产，除非用户主动退出或重新分析
   if (isNewSegment || chatHistory.value.length === 0) {
     if (segment.status === 'success') {
       chatHistory.value = [
@@ -207,7 +201,7 @@ const startSqueeze = (index: number) => {
     }
   }
   
-  // 始终切换到STAR标签页，但不清空已生成的资产
+  // 始终切换到STAR标签页
   activeTab.value = 'star';
 };
 
