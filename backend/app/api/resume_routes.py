@@ -1,22 +1,27 @@
-import os
 import json
 import logging
-import asyncio
+import os
+import uuid
 from fastapi import APIRouter, HTTPException, Form, File, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
 
+from app.config import get_api_key, get_api_url, get_model, get_ssl_verify
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-API_KEY = "sk-tnzuxxkuptjwcmeoeexkjdowbnbdqsnclxexsejagidgjfug"
+PDF_STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static", "pdfs")
+
+os.makedirs(PDF_STORAGE_DIR, exist_ok=True)
 
 async def call_ai(system_prompt, messages):
     """通用 AI 调用函数"""
-    url = "https://api.siliconflow.cn/v1/chat/completions"
+    url = f"{get_api_url()}/chat/completions"
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {get_api_key()}",
         "Content-Type": "application/json"
     }
 
@@ -24,14 +29,14 @@ async def call_ai(system_prompt, messages):
     full_messages.extend(messages)
 
     payload = {
-        "model": "deepseek-ai/DeepSeek-V3",
+        "model": get_model(),
         "messages": full_messages,
         "temperature": 0.7,
         "max_tokens": 2048
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, verify=get_ssl_verify()) as client:
             response = await client.post(url, json=payload, headers=headers)
             if response.status_code != 200:
                 logger.error(f"AI服务返回错误: {response.status_code} - {response.text}")
@@ -56,7 +61,7 @@ async def call_ai(system_prompt, messages):
         return None
 
 
-from app.services.resume_ocr import llm_extract_sections
+from app.services.resume_ocr import llm_analyze_resume
 from app.services.suggestions import architect_service
 from app.services.coach import coach_service
 
@@ -79,7 +84,7 @@ class CoachRequest(BaseModel):
 
 @router.post("/upload_pdf")
 async def upload_pdf(file: UploadFile = File(...)):
-    """【PDF上传接口】"""
+    """上传PDF：存储到服务器并提取文本"""
     from app.services.resume_ocr import extract_text_from_pdf_bytes
 
     if not file.filename.lower().endswith('.pdf'):
@@ -90,28 +95,93 @@ async def upload_pdf(file: UploadFile = File(...)):
         text = extract_text_from_pdf_bytes(pdf_bytes)
 
         if not text.strip():
-            return {"success": False, "message": "未能从PDF中提取到文本内容", "text": ""}
+            return {"success": False, "message": "未能从PDF中提取到文本内容", "text": "", "filename": ""}
 
-        return {"success": True, "message": "PDF解析成功", "text": text}
+        filename = f"{uuid.uuid4().hex}.pdf"
+        filepath = os.path.join(PDF_STORAGE_DIR, filename)
+        with open(filepath, "wb") as f:
+            f.write(pdf_bytes)
+
+        return {
+            "success": True,
+            "message": "PDF解析成功",
+            "text": text,
+            "filename": filename,
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF解析失败: {str(e)}")
 
 
-@router.post("/ocr")
-async def resume_ocr_api(text: str = Form(...), target_jd: str = Form("")):
-    """简历全盘体检：拆分段落并标注病灶"""
+from fastapi.responses import Response
+import fitz
+
+PDF_RENDER_SCALE = 2.0  # 2px per PDF point (144 DPI)
+
+
+@router.get("/pdf/{filename}")
+async def serve_pdf(filename: str):
+    """提供存储的PDF文件"""
+    filepath = os.path.join(PDF_STORAGE_DIR, filename)
+    if not os.path.isfile(filepath):
+        raise HTTPException(status_code=404, detail="PDF文件不存在")
+    return FileResponse(filepath, media_type="application/pdf")
+
+
+@router.get("/pdf/{filename}/page/{page_num}")
+async def serve_pdf_page_image(filename: str, page_num: int):
+    """将PDF的某一页渲染为PNG图片"""
+    filepath = os.path.join(PDF_STORAGE_DIR, filename)
+    if not os.path.isfile(filepath):
+        raise HTTPException(status_code=404, detail="PDF文件不存在")
+
     try:
-        # 把接收到的 target_jd 传给核心大脑函数
-        sections = await asyncio.to_thread(llm_extract_sections, text, target_jd)
-        return sections
+        doc = fitz.open(filepath)
+        if page_num < 0 or page_num >= len(doc):
+            doc.close()
+            raise HTTPException(status_code=404, detail="页码超出范围")
+
+        page = doc[page_num]
+        mat = fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE)
+        pix = page.get_pixmap(matrix=mat)
+        img_bytes = pix.tobytes("png")
+        doc.close()
+        return Response(content=img_bytes, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF页面渲染失败: {str(e)}")
+
+
+@router.post("/ocr")
+async def resume_ocr_api(
+    text: str = Form(...),
+    target_jd: str = Form(""),
+    pdf_filename: str = Form(""),
+):
+    """简历全盘体检：AI短语级标注 + PDF坐标定位"""
+    try:
+        pdf_bytes = None
+        if pdf_filename:
+            filepath = os.path.join(PDF_STORAGE_DIR, pdf_filename)
+            if os.path.isfile(filepath):
+                with open(filepath, "rb") as f:
+                    pdf_bytes = f.read()
+
+        result = await llm_analyze_resume(text, target_jd, pdf_bytes)
+
+        if pdf_filename:
+            result["pdf_url"] = f"/api/resume/pdf/{pdf_filename}"
+            result["render_scale"] = PDF_RENDER_SCALE
+            # Add page image URLs
+            for p in result.get("pdf_pages", []):
+                p["image_url"] = f"/api/resume/pdf/{pdf_filename}/page/{p['page_num']}"
+
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"体检神经传导失败: {str(e)}")
 
 
 @router.post("/optimize")
 async def optimize_resume_segment(request: OptimizeRequest):
-    """【核心改写接口】"""
     content = request.raw_text.strip()
     if not content:
         raise HTTPException(status_code=400, detail="简历内容不能为空哦，请写点什么吧。")
@@ -133,9 +203,6 @@ async def optimize_resume_segment(request: OptimizeRequest):
 
 @router.post("/coach")
 async def resume_coach_api(request: CoachRequest):
-    """
-    【5D 基因重组对话：互动式挤牙膏机制 - JD强绑定版】
-    """
     try:
         from app.services.coach import coach_service
         return await coach_service.coach_chat(

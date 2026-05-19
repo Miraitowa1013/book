@@ -4,11 +4,48 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI 简历架构师</title>
-    <!-- 就是加上下面这一行，让它一秒钟变漂亮 -->
+    <script>
+      tailwind.config = {
+        corePlugins: {
+          container: false,
+          preflight: false,
+        }
+      }
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      html, body, #app {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-height: 100vh !important;
+      }
+    </style>
   </head>
-  <body>
+  <body style="margin:0;padding:0;width:100%;max-width:100%">
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
+    <script>
+      setTimeout(() => {
+        const suspicious = [];
+        document.querySelectorAll('*').forEach(el => {
+          const cs = getComputedStyle(el);
+          if ((cs.maxWidth !== 'none' && cs.maxWidth !== '100%') || cs.marginLeft === 'auto' || cs.marginRight === 'auto') {
+            suspicious.push({
+              tag: el.tagName,
+              id: el.id,
+              class: el.className,
+              maxWidth: cs.maxWidth,
+              marginLeft: cs.marginLeft,
+              marginRight: cs.marginRight,
+              width: cs.width,
+            });
+          }
+        });
+        console.table(suspicious);
+        console.log('Width-constrained elements found:', suspicious.length);
+      }, 2000);
+    </script>
   </body>
 </html>

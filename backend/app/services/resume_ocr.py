@@ -1,10 +1,14 @@
+import asyncio
 import json
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import fitz
 import httpx
+
+from app.config import get_ssl_verify
 
 
 def _config_path_default() -> str:
@@ -55,13 +59,7 @@ class SiliconFlowClient:
                 "SILICONFLOW API Key 未设置：请配置环境变量或填写 backend/config/siliconflow.json"
             )
 
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.2,
-        max_tokens: int = 2048,
-        extra: Optional[Dict[str, Any]] = None,
-    ) -> str:
+    def _build_request(self, messages, temperature, max_tokens, extra):
         url = self.base_url.rstrip("/") + "/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -75,42 +73,9 @@ class SiliconFlowClient:
         }
         if extra:
             payload.update(extra)
+        return url, headers, payload
 
-        # 重试机制和更长的超时时间
-        delays = [1, 2, 4, 8]  # 重试间隔
-        last_exception = None
-        
-        for attempt in range(4):  # 最多重试4次
-            try:
-                # 增加超时时间：读取超时180秒，连接超时30秒
-                with httpx.Client(
-                    timeout=httpx.Timeout(180.0, connect=30.0), 
-                    trust_env=False
-                ) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    break
-            except httpx.RequestError as e:
-                last_exception = e
-                if attempt < 3:  # 不是最后一次尝试
-                    import time
-                    time.sleep(delays[attempt])
-                    continue
-                raise RuntimeError(f"硅基流动请求异常: {e}") from e
-
-        if not resp.is_success:
-            resp_text = ""
-            try:
-                resp_text = (resp.text or "").strip()
-            except Exception:
-                resp_text = ""
-            resp_text = resp_text[:5000]
-            raise RuntimeError(
-                f"硅基流动返回错误: HTTP {resp.status_code} {resp.reason_phrase}; "
-                f"body={resp_text or '(空响应)'}; model={self.model}"
-            )
-
-        data = resp.json()
-
+    def _parse_response(self, data):
         try:
             return data["choices"][0]["message"]["content"]
         except Exception:
@@ -118,6 +83,68 @@ class SiliconFlowClient:
                 if k in data and isinstance(data[k], str):
                     return data[k]
             raise RuntimeError(f"无法解析硅基流动响应: {data}")
+
+    def chat(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        url, headers, payload = self._build_request(messages, temperature, max_tokens, extra)
+        last_exception = None
+        for attempt in range(2):
+            try:
+                with httpx.Client(
+                    timeout=httpx.Timeout(45.0, connect=15.0),
+                    trust_env=False,
+                    verify=get_ssl_verify()
+                ) as client:
+                    resp = client.post(url, headers=headers, json=payload)
+                    break
+            except httpx.RequestError as e:
+                last_exception = e
+                if attempt < 1:
+                    time.sleep(1)
+                    continue
+                raise RuntimeError(f"硅基流动请求异常: {e}") from e
+
+        if not resp.is_success:
+            resp_text = (resp.text or "").strip()[:5000]
+            raise RuntimeError(f"硅基流动 HTTP {resp.status_code}: {resp_text}")
+
+        return self._parse_response(resp.json())
+
+    async def achat(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        url, headers, payload = self._build_request(messages, temperature, max_tokens, extra)
+        last_exception = None
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(45.0, connect=15.0),
+                    trust_env=False,
+                    verify=get_ssl_verify()
+                ) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+                    break
+            except httpx.RequestError as e:
+                last_exception = e
+                if attempt < 1:
+                    await asyncio.sleep(1)
+                    continue
+                raise RuntimeError(f"硅基流动请求异常: {e}") from e
+
+        if not resp.is_success:
+            resp_text = (resp.text or "").strip()[:5000]
+            raise RuntimeError(f"硅基流动 HTTP {resp.status_code}: {resp_text}")
+
+        return self._parse_response(resp.json())
 
 
 def extract_json_object(text: str) -> Any:
@@ -161,109 +188,227 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     return text
 
 
-def truncate_for_llm(text: str, max_chars: int = 8000) -> str:
-    """
-    截断过长的文本，减少 token 消耗以提升速度
-    """
+def _split_resume_paragraphs(text: str) -> list[str]:
+    """本地拆分简历段落（毫秒级），避免让 AI 同时做拆分+诊断"""
     text = text.strip()
-    if len(text) <= max_chars:
-        return text
-    head = text[: int(max_chars * 0.7)]
-    tail = text[-int(max_chars * 0.3) :]
-    return head + "\n...\n" + tail
+    parts = [p.strip() for p in text.split('\n\n') if p.strip()]
+    if len(parts) < 2:
+        parts = [p.strip() for p in text.split('\n') if p.strip()]
+    merged = []
+    for p in parts:
+        if merged and len(p) < 15:
+            merged[-1] = merged[-1] + '\n' + p
+        else:
+            merged.append(p)
+    return merged
 
 
-def llm_extract_sections(resume_text: str, target_jd: str = "") -> Any:
-    """
-    【ARK_XRAY 核心大脑】：
-    简历体检诊断 - 仅负责将简历拆分为逻辑段落并进行诊断
-    5D资产由后续的AI教练服务生成
-    """
-    client = SiliconFlowClient()
-    truncated = truncate_for_llm(resume_text)
+def _classify_paragraph(text: str) -> str:
+    """本地识别段落类型：personal / education / experience（毫秒级，不消耗 AI）"""
+    t = text.lower().replace(" ", "")
+    # 个人信息：邮箱、电话、地址、求职意向、年龄性别等
+    if re.search(r'[@＠][\w.-]+\.(com|cn|net|org|edu)', t):
+        return "personal"
+    if re.search(r'(电话|手机|联系方式|phone|tel|mobile|手机号)[：:]?\d', t):
+        return "personal"
+    if re.search(r'(邮箱|e-?mail|电子邮箱|email)[：:]?', t):
+        return "personal"
+    if re.search(r'(求职意向|求职方向|期望职位|应聘岗位|意向岗位|目标岗位|期望薪资|工作地点|所在地)', t):
+        return "personal"
+    if re.search(r'(出生|生日|年龄|性别|籍贯|身高|体重|民族|政治面貌|婚否|婚姻)', t):
+        return "personal"
+    if re.search(r'(地址|住址|现居|户籍|所在城市|居住地)', t):
+        return "personal"
+    if re.search(r'(github|linkedin|个人网站|个人博客|portfolio|作品集)', t):
+        return "personal"
+    # 教育背景：仅纯学历信息无需诊断（如"XX大学本科毕业"），但校园经历需要诊断
+    education_keywords = r'(本科|硕士|博士|学士|研究生|毕业|专业|学历|gpa|绩点|成绩|排名|主修课程)'
+    school_keywords = r'(大学|学院|学校)'
+    # 如果只包含学校名称和学历信息，判定为教育背景；如果包含经历描述，判定为experience
+    has_education = re.search(education_keywords, t)
+    has_school = re.search(school_keywords, t)
+    has_experience = re.search(r'(经历|项目|负责|参与|主导|搭建|运营|活动|策划|组织|管理)', t)
+    # 只有当没有经历描述，且有学历关键词时，才判定为education
+    if has_education and not has_experience:
+        return "education"
+    # 如果只有学校名称但有经历描述，也算作experience（校园经历）
+    if has_school and has_experience:
+        return "experience"
+    # 如果只有学校名称没有经历描述（如"XX大学"），算作education
+    if has_school and not has_experience:
+        return "education"
+    return "experience"
 
-    jd_info = f"\n【目标岗位】：{target_jd}" if target_jd else ""
 
-    system_prompt = """你是一个严苛的大厂HR。
+async def _comprehensive_diagnosis(
+    client: SiliconFlowClient,
+    experience_text: str,
+    target_jd: str,
+) -> list[dict]:
+    """单次 AI 调用，对工作/项目经历文本做逐词逐句的短语级标注"""
+    import logging
+    logger = logging.getLogger(__name__)
 
-任务：将简历拆分为逻辑段落，对比目标JD进行诊断。
+    if not experience_text or not experience_text.strip():
+        return []
 
-【诊断规则】：
-1. 姓名/电话/邮箱等个人信息：status=success, diagnosis="个人联系方式，无需优化"
-2. 个人概况：分析是否清晰有力、突出核心竞争力
-3. 教育背景：分析专业对标度、GPA竞争力、荣誉含金量
-4. 工作/项目经历：分析技术栈深度、业务复杂度、量化成果，结合JD指出缺乏哪些具体数据或能力
-5. status: danger/warning/success
+    jd_section = f"目标岗位JD：\n{target_jd}\n\n" if target_jd else ""
 
-【目标岗位】：""" + (target_jd if target_jd else "未指定") + """
+    prompt = f"""请分析以下简历内容，找出所有可以优化的短语并标注：
 
-【输出格式】（严格JSON，无markdown）：
-[
-  {
-    "text": "原文",
-    "status": "danger/warning/success",
-    "diagnosis": "毒舌诊断（结合JD指出缺乏哪些具体数据或能力）"
-  }
-]"""
+简历内容：
+{experience_text[:6000]}
 
-    user_prompt = f"简历分析：{jd_info}\n\n{truncated}"
+要求：
+1. 找出所有使用空洞动词的短语，如"负责"、"参与"、"协助"、"做"、"进行"等
+2. 找出所有描述空泛的短语，如"很多事情"、"大量工作"、"各种项目"等
+3. 找出所有缺少量化数据的短语
+4. 每个标注必须是简历中的精确原文，长度2-20字
+5. 用danger表示严重问题，warning表示可优化
+6. 尽可能多地标注，不要遗漏任何问题
+
+输出格式（纯JSON）：
+{{"annotations":[{{"phrase":"原文短语","status":"danger|warning","diagnosis":"问题描述"}}]}}"""
 
     try:
-        response_content = client.chat(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.3,
-            max_tokens=3000
+        resp = await client.achat(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=8192,
         )
-
-        parsed_result = extract_json_object(response_content)
-
-        sections = []
-        # 现在返回的是一个列表
-        if isinstance(parsed_result, list):
-            for idx, item in enumerate(parsed_result):
-                if isinstance(item, dict):
-                    sections.append({
-                        "id": idx + 1,
-                        "text": str(item.get("text", "")),
-                        "status": str(item.get("status", "warning")),
-                        "diagnosis": str(item.get("diagnosis", ""))
-                    })
-        else:
-            # 兼容旧格式（如果返回的是字典）
-            sections_data = parsed_result.get("sections", []) if isinstance(parsed_result, dict) else []
-            if isinstance(sections_data, list):
-                for idx, item in enumerate(sections_data):
-                    if isinstance(item, dict):
-                        sections.append({
-                            "id": idx + 1,
-                            "text": str(item.get("text", "")),
-                            "status": str(item.get("status", "warning")),
-                            "diagnosis": str(item.get("diagnosis", ""))
-                        })
-
-        if not sections:
-            sections = [{"id": 1, "text": truncated[:200], "status": "warning", "diagnosis": "未能识别简历段落，请重试"}]
-
-        # 5D资产为空，由后续AI教练服务生成
-        assets = {
-            "optimized_star": "",
-            "cover_letter": "",
-            "interview_questions": [],
-            "job_recommendations": [],
-            "career_advice": ""
-        }
-
-        return {
-            "sections": sections,
-            "assets": assets
-        }
-
+        logger.info(f"AI原始响应: {resp[:1000]}")  # 打印前1000字符
+        result = extract_json_object(resp)
+        logger.info(f"解析结果类型: {type(result)}")
+        logger.info(f"解析结果: {result}")
+        if isinstance(result, dict) and "annotations" in result:
+            return result["annotations"]
+        if isinstance(result, list):
+            return result
     except Exception as e:
-        print(f"分析异常: {e}")
-        return {
-            "sections": [{"id": 1, "text": truncated[:200], "status": "warning", "diagnosis": "分析服务暂时异常，请重试"}],
-            "assets": {"optimized_star": "", "cover_letter": "", "interview_questions": [], "job_recommendations": [], "career_advice": ""}
-        }
+        logger.error(f"AI调用或解析失败: {str(e)}")
+        pass
+
+    return []
+
+
+def _resolve_annotation_positions(
+    full_text: str,
+    ai_annotations: list[dict],
+) -> list[dict]:
+    """根据 AI 返回的短语原文，在完整文本中定位字符偏移（只做精确匹配）"""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    result = []
+    search_offset = 0
+    for item in ai_annotations:
+        phrase = (item.get("phrase") or "").strip()
+        if not phrase or len(phrase) < 2:
+            logger.warning(f"Skipping invalid phrase: {phrase}")
+            continue
+
+        # 只做精确匹配
+        pos = full_text.find(phrase, search_offset)
+        if pos == -1:
+            pos = full_text.find(phrase)
+        
+        if pos != -1:
+            result.append({
+                "id": len(result) + 1,
+                "phrase": phrase,
+                "start": pos,
+                "end": pos + len(phrase),
+                "status": str(item.get("status", "warning")),
+                "diagnosis": str(item.get("diagnosis", "")),
+            })
+            search_offset = pos + len(phrase)
+            logger.info(f"Successfully resolved: {phrase} at [{pos}, {pos + len(phrase)}]")
+        else:
+            logger.warning(f"Could not find exact match for: {phrase}")
+    
+    logger.info(f"Resolved {len(result)} out of {len(ai_annotations)} annotations")
+    return result
+
+
+def _find_pdf_annotations(pdf_bytes: bytes, annotations: list[dict]) -> list[dict]:
+    """在 PDF 每一页中定位标注短语的像素坐标"""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pages = []
+
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        page_width = page.rect.width
+        page_height = page.rect.height
+        highlights = []
+
+        for ann in annotations:
+            phrase = (ann.get("phrase") or "").strip()
+            if not phrase:
+                continue
+
+            rects = page.search_for(phrase)
+            if not rects:
+                cleaned = " ".join(phrase.split())
+                rects = page.search_for(cleaned)
+
+            for rect in rects:
+                highlights.append({
+                    "id": ann.get("id"),
+                    "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+                    "phrase": phrase,
+                    "status": ann.get("status", "warning"),
+                    "diagnosis": ann.get("diagnosis", ""),
+                })
+
+        pages.append({
+            "page_num": page_num,
+            "width": page_width,
+            "height": page_height,
+            "highlights": highlights,
+        })
+
+    doc.close()
+    return pages
+
+
+async def llm_analyze_resume(resume_text: str, target_jd: str = "", pdf_bytes: bytes = None) -> Any:
+    """智能诊断：本地分类过滤 + AI短语级标注，返回全文+标注位置+PDF标注坐标"""
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    paragraphs = _split_resume_paragraphs(resume_text)
+    if not paragraphs:
+        paragraphs = [resume_text[:200]]
+
+    logger.info(f"Split into {len(paragraphs)} paragraphs")
+
+    experience_texts = []
+    for text in paragraphs:
+        ptype = _classify_paragraph(text)
+        if ptype == "experience":
+            experience_texts.append(text)
+
+    logger.info(f"Found {len(experience_texts)} experience paragraphs")
+
+    experience_full = "\n".join(experience_texts) if experience_texts else resume_text
+
+    client = SiliconFlowClient()
+    ai_annotations = await _comprehensive_diagnosis(client, experience_full, target_jd)
+
+    logger.info(f"AI returned {len(ai_annotations)} annotations")
+    logger.info(f"AI annotations: {ai_annotations}")
+
+    annotations = _resolve_annotation_positions(resume_text, ai_annotations)
+
+    logger.info(f"Resolved {len(annotations)} annotations with positions")
+
+    result = {
+        "full_text": resume_text,
+        "annotations": annotations,
+    }
+
+    if pdf_bytes:
+        result["pdf_pages"] = _find_pdf_annotations(pdf_bytes, annotations)
+
+    return result
