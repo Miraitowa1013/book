@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch, reactive } from 'vue';
-import { Brain, Activity, Loader2, FileText, AlertCircle, CheckCircle2, Target as TargetIcon, Send, Sparkles, Mail, MessageCircleQuestion, Map as MapIcon, UploadCloud, FileCheck2, Info } from 'lucide-vue-next';
+import { ref, computed, nextTick, reactive, onUnmounted } from 'vue';
+import { Brain, Activity, Loader2, FileText, AlertCircle, CheckCircle2, Target as TargetIcon, Send, Sparkles, Mail, MessageCircleQuestion, Map as MapIcon, UploadCloud, FileCheck2, Info, Check } from 'lucide-vue-next';
 import axios from './api/axios';
 import PdfResumeViewer from './components/PdfResumeViewer.vue';
 import type { PdfPageData } from './components/PdfResumeViewer.vue';
@@ -9,11 +9,12 @@ import type { PdfPageData } from './components/PdfResumeViewer.vue';
 const API_BASE = "/resume";
 
 // --- 基础状态 ---
-const view = ref<'landing' | 'workspace'>('landing');    
-const rawInput = ref("");       
-const targetJD = ref("");       
-const isAnalyzing = ref(false); 
+const view = ref<'landing' | 'workspace'>('landing');
+const rawInput = ref("");
+const targetJD = ref("");
+const isAnalyzing = ref(false);
 const isProcessing = ref(false);
+const isApplying = ref(false);
 const userInput = ref("");
 const chatContainer = ref<HTMLElement | null>(null);
 const isUploading = ref(false);
@@ -52,14 +53,17 @@ interface Annotation {
   diagnosis: string;
   chat?: { role: string; content: string }[];
   assets?: AnnotationAssets;
+  pendingOptimized?: string;
+  resolvedState?: 'none' | 'applying' | 'flash' | 'resolved';
 }
 
 interface TextChunk {
   text: string;
   isHighlight: boolean;
   annotationId: number | null;
-  status: 'danger' | 'warning' | null;
+  status: 'danger' | 'warning' | 'resolved' | null;
   diagnosis: string | null;
+  resolvedState?: 'none' | 'applying' | 'flash' | 'resolved';
 }
 
 interface CoachResponse {
@@ -81,7 +85,11 @@ const pdfFilename = ref("");
 const renderScale = ref(2.0);
 const isPdfMode = computed(() => !!(pdfPages.value.length > 0 && pdfPages.value[0]?.image_url));
 
-const dangerCount = computed(() => annotations.value.filter(a => a.status === 'danger').length);
+// AbortController for debouncing rapid coach calls
+let coachAbortController: AbortController | null = null;
+
+const dangerCount = computed(() => annotations.value.filter(a => a.status === 'danger' && a.resolvedState !== 'resolved').length);
+const resolvedCount = computed(() => annotations.value.filter(a => a.resolvedState === 'resolved').length);
 
 const activeAnnotation = computed(() => {
   return (activeAnnotationId.value !== null)
@@ -116,12 +124,14 @@ const textChunks = computed<TextChunk[]>(() => {
         diagnosis: null,
       });
     }
+    const chunkStatus = ann.resolvedState === 'resolved' ? 'resolved' : ann.status;
     chunks.push({
       text: text.substring(annStart, annEnd),
       isHighlight: true,
       annotationId: ann.id,
-      status: ann.status,
+      status: chunkStatus,
       diagnosis: ann.diagnosis,
+      resolvedState: ann.resolvedState,
     });
     cursor = annEnd;
   }
@@ -228,7 +238,12 @@ const handleStartAnalysis = async () => {
 
     view.value = 'workspace';
     if (annotations.value.length === 0) {
-      showToast("未发现明显问题，简历已经很优秀了！", "success");
+      const warning = res.data?.analysis_warning;
+      if (warning) {
+        showToast(warning, "error");
+      } else {
+        showToast("未发现明显问题，简历已经很优秀了！", "success");
+      }
     } else {
       showToast(`扫描完成！发现 ${annotations.value.length} 处可优化点`, "success");
     }
@@ -280,6 +295,7 @@ const startSqueeze = (annotationId: number) => {
   });
 };
 
+// 防抖：取消上一次未完成的 coach 请求
 const handleSendMessage = async () => {
   if (!userInput.value.trim() || isProcessing.value || !activeAnnotation.value) return;
   const ann = activeAnnotation.value;
@@ -290,6 +306,12 @@ const handleSendMessage = async () => {
   userInput.value = "";
   isProcessing.value = true;
 
+  // 取消上一次请求（防抖/竞态保护）
+  if (coachAbortController) {
+    coachAbortController.abort();
+  }
+  coachAbortController = new AbortController();
+
   nextTick(() => {
     if (chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
   });
@@ -297,22 +319,20 @@ const handleSendMessage = async () => {
   try {
     const res = await axios.post(`${API_BASE}/coach`, {
       current_text: ann.phrase,
-      full_resume: rawInput.value,
+      full_resume: fullResumeText.value,
       chat_history: ann.chat,
       target_jd: targetJD.value
+    }, {
+      signal: coachAbortController.signal,
     });
 
     const data = res.data as CoachResponse;
     ann.chat.push({ role: "assistant", content: data.message });
 
     if (data.status === 'result' || data.optimized_star) {
-      if (data.status === 'result') {
-        ann.status = "warning";
-        ann.diagnosis = "重构成功！基因已完成 JD 对标。";
-      }
-
+      // 存储优化后的文本，但不自动应用 — 等待用户点击"确认应用"
       if (data.optimized_star) {
-        ann.phrase = data.optimized_star;
+        ann.pendingOptimized = data.optimized_star;
       }
 
       ann.assets = {
@@ -322,21 +342,112 @@ const handleSendMessage = async () => {
         match: data.jd_match_analysis || ann.assets.match,
         career: data.career_advice || ann.assets.career
       };
-
-      if (data.status === 'result') {
-         showToast("5D 黄金资产刷新成功！", "success");
-      }
     }
 
     nextTick(() => {
       if (chatContainer.value) chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || error?.name === 'AbortError') {
+      return; // 请求被取消，不显示错误
+    }
     ann.chat.push({ role: "assistant", content: "抱歉，教练脑暂时断线，请重试。" });
   } finally {
     isProcessing.value = false;
   }
 };
+
+// 打字机效果：逐字替换文本
+const animateTypewriter = async (
+  annotationId: number,
+  oldText: string,
+  newText: string,
+  onFrame: (displayText: string) => void,
+): Promise<void> => {
+  const duration = Math.min(Math.max(newText.length * 15, 400), 700);
+  const steps = Math.max(newText.length, 1);
+  const interval = duration / steps;
+
+  return new Promise((resolve) => {
+    let i = 0;
+    const timer = setInterval(() => {
+      i++;
+      if (i >= steps) {
+        clearInterval(timer);
+        onFrame(newText);
+        resolve();
+      } else {
+        const partial = newText.substring(0, i);
+        onFrame(partial);
+      }
+    }, interval);
+  });
+};
+
+// 核心：确认应用优化文本（含偏移量补偿 + 打字机动画）
+const confirmApplyOptimized = async (annotationId: number) => {
+  if (isApplying.value) return;
+  const ann = annotations.value.find(a => a.id === annotationId);
+  if (!ann || !ann.pendingOptimized) return;
+
+  const oldText = ann.phrase;
+  const newText = ann.pendingOptimized;
+  const oldLength = ann.end - ann.start;
+  const newLength = newText.length;
+  const delta = newLength - oldLength;
+
+  isApplying.value = true;
+  ann.resolvedState = 'applying';
+
+  // 字符串拼接：用新文本替换旧文本
+  const part1 = fullResumeText.value.substring(0, ann.start);
+  const part3 = fullResumeText.value.substring(ann.end);
+
+  // 打字机动画更新 fullResumeText（仅 animating chunk 可见变化）
+  await animateTypewriter(annotationId, oldText, newText, (partial) => {
+    fullResumeText.value = part1 + partial + part3;
+  });
+
+  // 打字机完成，应用最终文本
+  fullResumeText.value = part1 + newText + part3;
+
+  // 更新当前 annotation
+  ann.phrase = newText;
+  ann.end = ann.start + newLength;
+  ann.pendingOptimized = undefined;
+  ann.resolvedState = 'flash';
+  ann.diagnosis = '已优化 — 可再次点击进行迭代修改';
+
+  // 偏移量补偿：修正所有后续 annotation 的坐标
+  for (const item of annotations.value) {
+    if (item.id !== ann.id && item.start >= ann.end) {
+      item.start += delta;
+      item.end += delta;
+    }
+  }
+
+  isApplying.value = false;
+
+  // 短暂绿光闪烁后变为 resolved 状态
+  setTimeout(() => {
+    ann.resolvedState = 'resolved';
+  }, 600);
+
+  showToast("文本已应用到简历，5D 资产已刷新！", "success");
+};
+
+// 清除 pending 状态（用户放弃本次优化结果）
+const cancelPendingOptimized = (annotationId: number) => {
+  const ann = annotations.value.find(a => a.id === annotationId);
+  if (!ann) return;
+  ann.pendingOptimized = undefined;
+};
+
+onUnmounted(() => {
+  if (coachAbortController) {
+    coachAbortController.abort();
+  }
+});
 
 const copyAsset = async (text: string) => {
   if (!text) return;
@@ -486,9 +597,15 @@ const formatText = (text: string): string => {
             </div>
             <h1 class="font-black text-xl italic tracking-tighter uppercase leading-none hover:text-indigo-600 transition-colors">ARK_XRAY</h1>
           </div>
-          <div class="flex bg-red-100 px-4 py-1.5 rounded-full items-center gap-2 shadow-sm">
-            <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-            <span class="text-[10px] font-black text-red-600 uppercase tracking-widest">{{ dangerCount }} 处断层</span>
+          <div class="flex items-center gap-2">
+            <div class="flex bg-red-100 px-4 py-1.5 rounded-full items-center gap-2 shadow-sm">
+              <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+              <span class="text-[10px] font-black text-red-600 uppercase tracking-widest">{{ dangerCount }} 处断层</span>
+            </div>
+            <div v-if="resolvedCount > 0" class="flex bg-emerald-100 px-4 py-1.5 rounded-full items-center gap-2 shadow-sm">
+              <CheckCircle2 :size="12" class="text-emerald-500" />
+              <span class="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{{ resolvedCount }} 已修复</span>
+            </div>
           </div>
         </header>
 
@@ -530,7 +647,11 @@ const formatText = (text: string): string => {
                       @click="startSqueeze(chunk.annotationId!)"
                       :class="[
                         'cursor-pointer rounded-sm px-0.5 transition-all border-b-2',
-                        chunk.status === 'danger' ? 'bg-red-100 border-red-400 hover:bg-red-200 text-red-900' : 'bg-amber-100 border-amber-400 hover:bg-amber-200 text-amber-900',
+                        chunk.status === 'danger' ? 'bg-red-100 border-red-400 hover:bg-red-200 text-red-900' :
+                        chunk.status === 'resolved' ? 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100 text-emerald-800' :
+                        'bg-amber-100 border-amber-400 hover:bg-amber-200 text-amber-900',
+                        chunk.resolvedState === 'applying' ? 'bg-yellow-100 border-yellow-400 animate-pulse' : '',
+                        chunk.resolvedState === 'flash' ? 'resolved-flash' : '',
                         activeAnnotationId === chunk.annotationId ? 'ring-2 ring-indigo-400 ring-offset-1' : ''
                       ]"
                       :title="chunk.diagnosis || ''"
@@ -570,6 +691,20 @@ const formatText = (text: string): string => {
               </div>
             </div>
             <div v-if="isProcessing" class="text-[10px] font-black text-slate-500 uppercase px-4 animate-pulse">AI 正在深度剖析信息...</div>
+            <!-- 确认应用到简历按钮 -->
+            <div v-if="activeAnnotation?.pendingOptimized && !isApplying" class="px-4 sm:px-6 py-3 flex gap-2">
+              <button @click="confirmApplyOptimized(activeAnnotation.id)" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 active:scale-95 transition-all">
+                <Check :size="18" /> 确认应用到简历
+              </button>
+              <button @click="cancelPendingOptimized(activeAnnotation.id)" class="px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 rounded-xl font-bold text-sm active:scale-95 transition-all">
+                放弃
+              </button>
+            </div>
+            <div v-if="isApplying && activeAnnotation?.resolvedState === 'applying'" class="px-4 sm:px-6 py-3">
+              <div class="w-full py-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl text-yellow-400 font-bold text-sm text-center animate-pulse">
+                正在应用优化文本...
+              </div>
+            </div>
           </div>
 
           <div class="px-4 sm:px-6 py-4 bg-black/40">
@@ -655,7 +790,7 @@ const formatText = (text: string): string => {
                 <template v-for="(chunk, idx) in textChunks" :key="idx">
                   <span v-if="!chunk.isHighlight">{{ chunk.text }}</span>
                   <span v-else
-                    :class="chunk.status === 'danger' ? 'bg-red-100 border-b-2 border-red-400 text-red-900 px-0.5' : 'bg-amber-100 border-b-2 border-amber-400 text-amber-900 px-0.5'"
+                    :class="chunk.status === 'danger' ? 'bg-red-100 border-b-2 border-red-400 text-red-900 px-0.5' : chunk.status === 'resolved' ? 'bg-emerald-50 border-b-2 border-emerald-200 text-emerald-800 px-0.5' : 'bg-amber-100 border-b-2 border-amber-400 text-amber-900 px-0.5'"
                   >{{ chunk.text }}</span>
                 </template>
               </p>
@@ -724,5 +859,19 @@ body > #app {
 .print-break-inside-avoid {
   break-inside: avoid;
   page-break-inside: avoid;
+}
+.resolved-flash {
+  animation: resolved-flash 0.6s ease-out;
+}
+@keyframes resolved-flash {
+  0% { background-color: #34d399; color: #fff; transform: scale(1.03); }
+  100% { background-color: #ecfdf5; color: #065f46; transform: scale(1); }
+}
+.typewriter-char {
+  animation: typewriter-pop 0.15s ease-out;
+}
+@keyframes typewriter-pop {
+  0% { opacity: 0; transform: translateY(2px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 </style>

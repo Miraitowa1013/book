@@ -54,9 +54,9 @@ class SiliconFlowClient:
         ).strip()
         self.model = (model or env_model or cfg.get("model") or cfg.get("modelName") or "").strip() or "deepseek-ai/DeepSeek-V3"
 
-        if not self.api_key:
+        if not self.api_key or self.api_key == "YOUR_API_KEY_HERE":
             raise RuntimeError(
-                "SILICONFLOW API Key 未设置：请配置环境变量或填写 backend/config/siliconflow.json"
+                "SILICONFLOW API Key 未设置或仍为占位值：请设置环境变量 SILICONFLOW_API_KEY 或在 backend/config/siliconflow.json 中填写真实 Key"
             )
 
     def _build_request(self, messages, temperature, max_tokens, extra):
@@ -284,11 +284,10 @@ async def _comprehensive_diagnosis(
             return result["annotations"]
         if isinstance(result, list):
             return result
+        raise RuntimeError(f"AI返回格式不正确: {result}")
     except Exception as e:
         logger.error(f"AI调用或解析失败: {str(e)}")
-        pass
-
-    return []
+        raise RuntimeError(f"AI分析服务暂时异常: {str(e)}")
 
 
 def _resolve_annotation_positions(
@@ -399,6 +398,9 @@ async def llm_analyze_resume(resume_text: str, target_jd: str = "", pdf_bytes: b
     logger.info(f"AI returned {len(ai_annotations)} annotations")
     logger.info(f"AI annotations: {ai_annotations}")
 
+    if len(ai_annotations) == 0:
+        logger.warning("AI返回0个标注，可能是服务调用失败或简历内容过于简洁")
+
     annotations = _resolve_annotation_positions(resume_text, ai_annotations)
 
     logger.info(f"Resolved {len(annotations)} annotations with positions")
@@ -406,7 +408,11 @@ async def llm_analyze_resume(resume_text: str, target_jd: str = "", pdf_bytes: b
     result = {
         "full_text": resume_text,
         "annotations": annotations,
+        "analysis_warning": None,
     }
+
+    if len(annotations) == 0 and experience_texts:
+        result["analysis_warning"] = "AI 分析完成但未发现可优化短语。如果是中文简历，请确认 API Key 有效且模型支持中文分析。"
 
     if pdf_bytes:
         result["pdf_pages"] = _find_pdf_annotations(pdf_bytes, annotations)
